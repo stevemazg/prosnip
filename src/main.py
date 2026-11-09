@@ -7,10 +7,9 @@ from PyQt6.QtCore import QObject, QThread, QTimer, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QGuiApplication, QIcon, QPainter, QPixmap
 from PyQt6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
 
-import keyboard
-
 from capture import CaptureOverlay
 from editor import APP_NAME, EditorWindow
+from hotkey import GlobalHotkey
 
 log = logging.getLogger("prosnip")
 
@@ -36,9 +35,11 @@ def candidate_log_directories() -> list[Path]:
 def resolve_log_path(directories: list[Path] | None = None) -> Path | None:
     """Return a writable ``<AppName>.log`` path, or None if every candidate fails.
 
-    The first choice is the folder that contains the executable (the working
-    directory when running from source). If that folder cannot be written, the
-    fallback is ``%LOCALAPPDATA%\\<AppName>``.
+    The first choice is the folder that contains the executable. For a
+    PyInstaller onedir build that is the folder with ``ProSnip-Bob.exe``,
+    beside ``_internal``, not inside it. When running from source the working
+    directory is used. If that folder cannot be written, the fallback is
+    ``%LOCALAPPDATA%\\<AppName>``.
     """
     filename = f"{APP_NAME}.log"
     for directory in candidate_log_directories() if directories is None else directories:
@@ -168,6 +169,7 @@ class ProSnipApp:
         self._signals.trigger_capture.connect(self._show_capture)
 
         self._tray = None
+        self._hotkey: GlobalHotkey | None = None
         self._session: CaptureOverlay | None = None
         self._capture_pending = False
         self._editors: list[EditorWindow] = []
@@ -200,18 +202,13 @@ class ProSnipApp:
         if reason == QSystemTrayIcon.ActivationReason.Trigger:
             self._show_capture()
 
-    def _on_hotkey(self):
-        # The keyboard callback runs off the GUI thread. The signal is queued.
-        self._signals.trigger_capture.emit()
-
     def _register_hotkey(self):
-        try:
-            keyboard.add_hotkey("ctrl+shift+s", self._on_hotkey, suppress=True)
-        except Exception:
-            log.exception("Failed to register the global hotkey")
-            self._notify(
-                "Could not register Ctrl+Shift+S. Use the tray icon to capture."
-            )
+        # WM_HOTKEY is delivered on the GUI thread, so the signal is emitted
+        # directly. Tray capture does not depend on this registration.
+        self._hotkey = GlobalHotkey(self._signals.trigger_capture.emit)
+        reason = self._hotkey.register(self._app)
+        if reason:
+            self._notify(reason)
 
     def _notify(self, message: str):
         log.info("%s", message)
@@ -288,9 +285,10 @@ class ProSnipApp:
 
     def _quit(self):
         try:
-            keyboard.unhook_all()
+            if self._hotkey is not None:
+                self._hotkey.unregister()
         except Exception:
-            log.exception("Failed to remove hotkeys")
+            log.exception("Failed to unregister the hotkey")
         self._app.quit()
 
     def run(self):

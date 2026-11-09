@@ -5,7 +5,7 @@ Lightweight Windows screen-snip and annotation tool built with Python and PyQt6.
 ## Requirements
 
 - Python 3.10+ to run from source. The Windows build uses Python 3.12.
-- Windows for the packaged executable. The global hotkey uses the `keyboard` library.
+- Windows for the packaged application. Ctrl+Shift+S is registered with the Windows `RegisterHotKey` API. On other systems, use the tray icon to capture.
 
 ## Install
 
@@ -23,7 +23,7 @@ ProSnip-Bob starts minimised to the system tray.
 
 ## Capture
 
-Press **Ctrl+Shift+S** (global hotkey, works even when the app is minimised) or click the tray icon to open the capture overlay. An overlay is shown on every connected monitor, including monitors placed to the left of or above the primary and monitors that use different scale factors (for example 150% on one screen and 100% on another). Click and drag to select a region. Press **Escape** to cancel.
+Press **Ctrl+Shift+S** (a normal Windows hotkey, works even when the app is minimised) or click the tray icon to open the capture overlay. If another application already owns that hotkey, ProSnip-Bob reports it in the tray and capture from the tray icon still works. An overlay is shown on every connected monitor, including monitors placed to the left of or above the primary and monitors that use different scale factors (for example 150% on one screen and 100% on another). Click and drag to select a region. Press **Escape** to cancel.
 
 A second capture request is ignored while one is already open or waiting to open. Each successful snip opens its own editor window, so earlier snips stay open.
 
@@ -69,24 +69,33 @@ Select any annotation item and drag the white square handles to resize it.
 
 ## Log
 
-ProSnip-Bob writes `ProSnip-Bob.log` next to the executable. If that folder cannot be written, the log is saved under `%LOCALAPPDATA%\ProSnip-Bob\`. An unexpected error is written to the log and shown in a message box, so a windowed build does not close without an explanation.
+ProSnip-Bob writes `ProSnip-Bob.log` in the same folder as `ProSnip-Bob.exe`. In the folder build that is next to the `_internal` directory, not inside it. If that folder cannot be written, the log is saved under `%LOCALAPPDATA%\ProSnip-Bob\`. An unexpected error is written to the log and shown in a message box, so a windowed build does not close without an explanation.
 
-## Build to EXE (Windows)
+## Build (Windows)
 
 ```bat
 build.bat
 ```
 
-Output: `dist/ProSnip-Bob.exe` — a single executable, no installer needed.
+That runs:
 
-GitHub Actions (`.github/workflows/build-windows.yml`) builds the same executable on `windows-latest` when `prosnip-bob` is pushed, and when the workflow is run by hand. The executable is uploaded as the `ProSnip-Bob` artifact.
+```bat
+pyinstaller --noconfirm --clean --onedir --windowed --noupx --name ProSnip-Bob --exclude-module tkinter --version-file version_info.txt src/main.py
+```
+
+Output: `dist/ProSnip-Bob/`, containing `ProSnip-Bob.exe` and `_internal`. Run `ProSnip-Bob.exe` from that folder. The executable needs `_internal` beside it. Version information in the executable names the product ProSnip-Bob, version 1.1.0.0. UPX is not used.
+
+GitHub Actions (`.github/workflows/build-windows.yml`) builds the same folder on `windows-latest` when `prosnip-bob` is pushed, and when the workflow is run by hand. It zips `dist/ProSnip-Bob/` to `ProSnip-Bob.zip` and uploads that zip as the `ProSnip-Bob` artifact.
+
+ProSnip-Bob is not code-signed. Windows SmartScreen may warn the first time you run it. If you trust the build, choose More info and then Run anyway. Antivirus software may also warn about a new unsigned application. The build does not use a packer, and it does not install a low-level keyboard hook.
 
 ## File Structure
 
 ```
 ProSnip-Bob/
 ├── src/
-│   ├── main.py          # Entry point, tray, hotkey, logging
+│   ├── main.py          # Entry point, tray, logging
+│   ├── hotkey.py        # Ctrl+Shift+S via RegisterHotKey
 │   ├── capture.py       # Per-monitor capture overlay
 │   ├── editor.py        # Main editor window
 │   ├── canvas.py        # QGraphicsScene + QGraphicsView
@@ -98,6 +107,7 @@ ProSnip-Bob/
 │   └── test_prosnip_bob.py
 ├── .github/workflows/build-windows.yml
 ├── requirements.txt
+├── version_info.txt     # Windows version resource
 ├── build.bat
 └── README.md
 ```

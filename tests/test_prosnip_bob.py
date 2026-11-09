@@ -5,6 +5,7 @@ that keeps a per-monitor, widget-local selection aligned with the grab,
 including a 150% scale factor and a monitor that lives at a negative origin.
 """
 
+import ctypes
 import logging
 import os
 import sys
@@ -27,6 +28,7 @@ from PIL import Image
 
 import capture
 import editor
+import hotkey
 import items
 import main
 
@@ -42,12 +44,9 @@ def _release_host(host):
         window.close()
     if host._tray is not None:
         host._tray.hide()
-    try:
-        import keyboard
-
-        keyboard.unhook_all()
-    except Exception:
-        pass
+    handle = getattr(host, "_hotkey", None)
+    if handle is not None:
+        handle.unregister()
     QApplication.processEvents()
 
 
@@ -322,6 +321,69 @@ class TextEditingTests(unittest.TestCase):
         self.assertTrue(event.isAccepted())
 
 
+class HotkeyTests(unittest.TestCase):
+    def test_modifiers_match_the_win32_api(self):
+        self.assertEqual(hotkey.MOD_CONTROL, 0x0002)
+        self.assertEqual(hotkey.MOD_SHIFT, 0x0004)
+        self.assertEqual(hotkey.MOD_NOREPEAT, 0x4000)
+        self.assertEqual(
+            hotkey.HOTKEY_MODIFIERS,
+            hotkey.MOD_CONTROL | hotkey.MOD_SHIFT | hotkey.MOD_NOREPEAT,
+        )
+        self.assertEqual(hotkey.VK_S, 0x53)
+        self.assertEqual(hotkey.WM_HOTKEY, 0x0312)
+
+    def test_parser_recognises_only_our_hotkey_message(self):
+        msg = hotkey.MSG()
+        msg.message = hotkey.WM_HOTKEY
+        msg.wParam = hotkey.HOTKEY_ID
+        address = ctypes.addressof(msg)
+        self.assertTrue(
+            hotkey.is_our_hotkey_message(b"windows_generic_MSG", address, hotkey.HOTKEY_ID)
+        )
+        self.assertFalse(
+            hotkey.is_our_hotkey_message(b"windows_generic_MSG", address, hotkey.HOTKEY_ID + 1)
+        )
+        msg.message = 0x0010
+        self.assertFalse(
+            hotkey.is_our_hotkey_message(b"windows_generic_MSG", address, hotkey.HOTKEY_ID)
+        )
+        msg.message = hotkey.WM_HOTKEY
+        self.assertFalse(
+            hotkey.is_our_hotkey_message(b"xcb_generic_event_t", address, hotkey.HOTKEY_ID)
+        )
+
+    def test_filter_runs_the_callback_for_our_hotkey(self):
+        calls = []
+        event_filter = hotkey.HotkeyEventFilter(hotkey.HOTKEY_ID, lambda: calls.append("go"))
+        msg = hotkey.MSG()
+        msg.message = hotkey.WM_HOTKEY
+        msg.wParam = hotkey.HOTKEY_ID
+        self.assertEqual(
+            event_filter.nativeEventFilter(b"windows_generic_MSG", ctypes.addressof(msg)),
+            (True, 0),
+        )
+        self.assertEqual(calls, ["go"])
+        msg.message = 0x000F
+        self.assertEqual(
+            event_filter.nativeEventFilter(b"windows_generic_MSG", ctypes.addressof(msg)),
+            (False, 0),
+        )
+        self.assertEqual(calls, ["go"])
+
+    def test_register_is_unavailable_off_windows(self):
+        if sys.platform == "win32":
+            self.skipTest("Windows registers a real hotkey")
+        calls = []
+        handle = hotkey.GlobalHotkey(lambda: calls.append(1))
+        reason = handle.register(QApplication.instance())
+        self.addCleanup(handle.unregister)
+        self.assertEqual(reason, hotkey.UNAVAILABLE_MESSAGE)
+        self.assertIn("Windows", reason)
+        self.assertEqual(calls, [])
+        handle.unregister()
+
+
 class AppTests(unittest.TestCase):
     def test_names_and_copy_shortcut_tooltip(self):
         self.assertEqual(editor.APP_NAME, "ProSnip-Bob")
@@ -422,18 +484,61 @@ class AppTests(unittest.TestCase):
     def test_packaging_files_name_the_bob_executable(self):
         requirements = (ROOT / "requirements.txt").read_text(encoding="utf-8")
         self.assertNotIn("mss", requirements)
+        self.assertNotIn("keyboard", requirements)
         build = (ROOT / "build.bat").read_text(encoding="utf-8")
         workflow = (ROOT / ".github" / "workflows" / "build-windows.yml").read_text(encoding="utf-8")
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        version = (ROOT / "version_info.txt").read_text(encoding="utf-8")
         command = (
-            "pyinstaller --noconfirm --clean --onefile --windowed --noupx "
-            "--name ProSnip-Bob --exclude-module tkinter src/main.py"
+            "pyinstaller --noconfirm --clean --onedir --windowed --noupx "
+            "--name ProSnip-Bob --exclude-module tkinter "
+            "--version-file version_info.txt src/main.py"
         )
         self.assertIn(command, build)
         self.assertIn(command, workflow)
+        self.assertIn(command, readme)
+        self.assertNotIn("--onefile", build)
+        self.assertNotIn("--onefile", workflow)
+        self.assertIn("dist/ProSnip-Bob.zip", workflow)
         self.assertIn("name: ProSnip-Bob", workflow)
         self.assertIn("prosnip-bob", workflow)
         self.assertIn("python-version: \"3.12\"", workflow)
         self.assertIn("QT_QPA_PLATFORM: offscreen", workflow)
+        self.assertIn("hotkey, main", workflow)
+        for text in (
+            "Steve Maz",
+            "ProSnip-Bob",
+            "ProSnip-Bob screen capture and annotation tool",
+            "1.1.0.0",
+            "ProSnip-Bob.exe",
+            "Copyright (C) 2026 Steve Maz",
+        ):
+            self.assertIn(text, version)
+
+    def test_frozen_log_sits_next_to_the_exe(self):
+        import tempfile
+
+        old_executable = sys.executable
+        had_frozen = hasattr(sys, "frozen")
+        old_frozen = getattr(sys, "frozen", None)
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                exe_dir = Path(tmp) / "ProSnip-Bob"
+                internal = exe_dir / "_internal"
+                internal.mkdir(parents=True)
+                exe = exe_dir / "ProSnip-Bob.exe"
+                exe.write_bytes(b"")
+                sys.frozen = True
+                sys.executable = str(exe)
+                directories = main.candidate_log_directories()
+                self.assertEqual(directories[0], exe_dir.resolve())
+                self.assertNotEqual(directories[0], internal.resolve())
+        finally:
+            sys.executable = old_executable
+            if had_frozen:
+                sys.frozen = old_frozen
+            elif hasattr(sys, "frozen"):
+                delattr(sys, "frozen")
 
 
 if __name__ == "__main__":

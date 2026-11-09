@@ -35,16 +35,23 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
-          .venv\Scripts\python.exe -c "import sys; sys.path.insert(0, 'src'); import capture, editor, canvas, items, toolbar, stamp_picker, styles, main"
+          .venv\Scripts\python.exe -c "import sys; sys.path.insert(0, 'src'); import capture, editor, canvas, items, toolbar, stamp_picker, styles, hotkey, main"
 
       - name: Build executable
         run: |
           $env:Path = "$PWD\.venv\Scripts;$env:Path"
-          pyinstaller --noconfirm --clean --onefile --windowed --noupx --name ProSnip-Bob --exclude-module tkinter src/main.py
+          pyinstaller --noconfirm --clean --onedir --windowed --noupx --name ProSnip-Bob --exclude-module tkinter --version-file version_info.txt src/main.py
 
-      - name: Upload ProSnip-Bob.exe
+      - name: Zip application folder
+        run: |
+          if (-not (Test-Path dist\ProSnip-Bob\ProSnip-Bob.exe)) { throw "ProSnip-Bob.exe was not produced" }
+          if (-not (Test-Path dist\ProSnip-Bob\_internal)) { throw "The _internal folder is missing" }
+          if (Test-Path dist\ProSnip-Bob.zip) { Remove-Item dist\ProSnip-Bob.zip }
+          Compress-Archive -Path dist\ProSnip-Bob -DestinationPath dist\ProSnip-Bob.zip
+
+      - name: Upload ProSnip-Bob.zip
         uses: actions/upload-artifact@v4
         with:
           name: ProSnip-Bob
-          path: dist/ProSnip-Bob.exe
+          path: dist/ProSnip-Bob.zip
           if-no-files-found: error
