@@ -4,18 +4,52 @@ from PyQt6.QtWidgets import (
     QFormLayout, QSpinBox, QCheckBox, QDialogButtonBox,
     QGraphicsPixmapItem, QApplication, QLabel
 )
+from PyQt6.QtCore import Qt, QRectF, QEvent, QRect
 from PyQt6.QtGui import (
     QPixmap, QImage, QPainter, QColor, QKeySequence,
-    QShortcut
+    QShortcut, QKeyEvent
 )
-from PyQt6.QtCore import Qt, QRectF, QPointF, QSize
 
 from canvas import ProSnipScene, ProSnipView
 from toolbar import ToolBar
 from styles import QuickStyle
 
 import io
+import math
 from PIL import Image
+
+APP_NAME = "ProSnip-Bob"
+
+
+def clamp_crop_rect(rect: QRectF, width: int, height: int) -> QRect | None:
+    """Intersect a crop with the image and return whole pixels inside it.
+
+    A drag that starts outside the picture used to be passed straight to
+    ``QPixmap.copy`` / ``Image.crop``, which then returned a null or shifted
+    image. Partial pixels on the edge are kept.
+    """
+    if width < 1 or height < 1:
+        return None
+    clipped = rect.normalized().intersected(QRectF(0, 0, width, height))
+    if clipped.isEmpty():
+        return None
+    left = max(0, math.floor(clipped.left()))
+    top = max(0, math.floor(clipped.top()))
+    right = min(width, math.ceil(clipped.right()))
+    bottom = min(height, math.ceil(clipped.bottom()))
+    if right <= left or bottom <= top:
+        return None
+    return QRect(int(left), int(top), int(right - left), int(bottom - top))
+
+
+def _crop_pil(image: Image.Image, crop: QRect) -> Image.Image:
+    left = max(0, min(crop.left(), image.width))
+    top = max(0, min(crop.top(), image.height))
+    right = max(left, min(crop.left() + crop.width(), image.width))
+    bottom = max(top, min(crop.top() + crop.height(), image.height))
+    if right <= left or bottom <= top:
+        return image
+    return image.crop((left, top, right, bottom))
 
 
 def pil_to_qpixmap(pil_img: Image.Image) -> QPixmap:
@@ -93,7 +127,7 @@ class EditorWindow(QMainWindow):
         self._filename = None
         self._bg_item = None
 
-        self.setWindowTitle("ProSnip — Untitled")
+        self.setWindowTitle(f"{APP_NAME} — Untitled")
         self.setMinimumSize(900, 600)
         self.setStyleSheet("background-color: #2b2b2b;")
 
@@ -136,7 +170,7 @@ class EditorWindow(QMainWindow):
 
         self._btn_save_png = _tb_btn("Save PNG", "Save as PNG (Ctrl+S)")
         self._btn_save_jpg = _tb_btn("Save JPG", "Save as JPG")
-        self._btn_copy = _tb_btn("Copy", "Copy to clipboard (Ctrl+C)")
+        self._btn_copy = _tb_btn("Copy", "Copy to clipboard (Ctrl+Shift+C)")
         self._btn_resize = _tb_btn("Resize…", "Resize canvas")
 
         for btn in [self._btn_save_png, self._btn_save_jpg, self._btn_copy, self._btn_resize]:
@@ -170,9 +204,30 @@ class EditorWindow(QMainWindow):
         QShortcut(QKeySequence("Ctrl+S"), self).activated.connect(self._save_png)
         QShortcut(QKeySequence("Ctrl+Shift+C"), self).activated.connect(self._copy_clipboard)
         QShortcut(QKeySequence("Ctrl+Z"), self).activated.connect(self._scene.undo)
-        QShortcut(QKeySequence("Delete"), self).activated.connect(self._scene.delete_selected)
+        QShortcut(QKeySequence(Qt.Key.Key_Delete), self).activated.connect(self._on_delete_shortcut)
         QShortcut(QKeySequence("Escape"), self).activated.connect(
             lambda: self._on_tool_changed("select")
+        )
+
+    def _on_delete_shortcut(self):
+        """Delete the selection, unless a text box is being edited.
+
+        The window-level shortcut runs before the graphics view sees the key.
+        While text is being edited, send Delete through to that text box
+        instead of removing the item.
+        """
+        if self._view.is_text_editing():
+            self._forward_edit_key(Qt.Key.Key_Delete)
+            return
+        self._scene.delete_selected()
+
+    def _forward_edit_key(self, key: Qt.Key):
+        item = self._scene.focusItem()
+        if item is None:
+            return
+        self._scene.sendEvent(
+            item,
+            QKeyEvent(QEvent.Type.KeyPress, key, Qt.KeyboardModifier.NoModifier),
         )
 
     def _on_tool_changed(self, tool: str):
@@ -206,7 +261,7 @@ class EditorWindow(QMainWindow):
             img = self._render_scene()
             img.save(path, "PNG")
             self._filename = path
-            self.setWindowTitle(f"ProSnip — {path}")
+            self.setWindowTitle(f"{APP_NAME} — {path}")
 
     def _save_jpg(self):
         path, _ = QFileDialog.getSaveFileName(
@@ -217,7 +272,7 @@ class EditorWindow(QMainWindow):
             img = self._render_scene()
             img.save(path, "JPEG", 95)
             self._filename = path
-            self.setWindowTitle(f"ProSnip — {path}")
+            self.setWindowTitle(f"{APP_NAME} — {path}")
 
     def _copy_clipboard(self):
         img = self._render_scene()
@@ -244,20 +299,19 @@ class EditorWindow(QMainWindow):
         if self._bg_item is None:
             return
         px = self._bg_item.pixmap()
-        # Crop the pixmap
-        cropped_px = px.copy(rect.toRect())
+        crop = clamp_crop_rect(rect, px.width(), px.height())
+        if crop is None:
+            return
+        cropped_px = px.copy(crop)
+        if cropped_px.isNull():
+            return
         self._bg_item.setPixmap(cropped_px)
-        # Shift scene origin
-        offset = rect.topLeft()
         self._bg_item.setPos(0, 0)
-        self._scene.setSceneRect(QRectF(0, 0, rect.width(), rect.height()))
-        # Shift all other items
+        self._scene.setSceneRect(QRectF(0, 0, crop.width(), crop.height()))
+        # Child handles live in their parent's coordinates. Moving them as
+        # well as the parent shifts them twice.
         for item in self._scene.items():
-            if item is self._bg_item:
+            if item is self._bg_item or item.parentItem() is not None:
                 continue
-            item.moveBy(-offset.x(), -offset.y())
-        # Update PIL image
-        self._pil_image = self._pil_image.crop((
-            int(rect.left()), int(rect.top()),
-            int(rect.right()), int(rect.bottom())
-        ))
+            item.moveBy(-float(crop.left()), -float(crop.top()))
+        self._pil_image = _crop_pil(self._pil_image, crop)

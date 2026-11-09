@@ -1,16 +1,16 @@
 from PyQt6.QtWidgets import (
     QGraphicsScene, QGraphicsView, QGraphicsPixmapItem,
-    QGraphicsRectItem, QFileDialog
+    QGraphicsRectItem, QFileDialog, QWidget
 )
 from PyQt6.QtGui import (
     QPainter, QPen, QBrush, QColor, QPixmap, QImage,
     QKeyEvent, QTransform
 )
-from PyQt6.QtCore import Qt, QRectF, QPointF, pyqtSignal
+from PyQt6.QtCore import Qt, QRectF, QPointF, QEvent, pyqtSignal
 
 from items import (
     ArrowItem, TextItem, CalloutItem, StampItem,
-    RectItem, EllipseItem, ImageOverlayItem
+    RectItem, EllipseItem, ImageOverlayItem, item_is_text_editing
 )
 from stamp_picker import StampPickerDialog
 from styles import DEFAULT_STYLE
@@ -222,9 +222,33 @@ class ProSnipScene(QGraphicsScene):
         super().mouseReleaseEvent(event)
 
 
+class _CanvasViewport(QWidget):
+    """Accepts Delete and Backspace while a text box is being edited.
+
+    Those keys are also window shortcuts. The shortcut map delivers
+    ShortcutOverride to the focus widget first, which is this viewport.
+    Accepting it lets the text box receive the key.
+    """
+
+    def __init__(self, view: "ProSnipView"):
+        super().__init__(view)
+        self._view = view
+
+    def event(self, event):
+        if (
+            event.type() == QEvent.Type.ShortcutOverride
+            and event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace)
+            and self._view.is_text_editing()
+        ):
+            event.accept()
+            return True
+        return super().event(event)
+
+
 class ProSnipView(QGraphicsView):
     def __init__(self, scene: ProSnipScene, parent=None):
         super().__init__(scene, parent)
+        self.setViewport(_CanvasViewport(self))
         self.setRenderHint(QPainter.RenderHint.Antialiasing)
         self.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
         self.setDragMode(QGraphicsView.DragMode.NoDrag)
@@ -232,11 +256,36 @@ class ProSnipView(QGraphicsView):
         self.setResizeAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
         self.setStyleSheet("background-color: #2b2b2b; border: none;")
 
+    def is_text_editing(self) -> bool:
+        scene = self.scene()
+        if scene is None:
+            return False
+        return item_is_text_editing(scene.focusItem())
+
+    def event(self, event):
+        if (
+            event.type() == QEvent.Type.ShortcutOverride
+            and event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace)
+            and self.is_text_editing()
+        ):
+            event.accept()
+            return True
+        return super().event(event)
+
     def keyPressEvent(self, event: QKeyEvent):
         scene = self.scene()
-        if event.key() == Qt.Key.Key_Delete or event.key() == Qt.Key.Key_Backspace:
-            scene.delete_selected()
-        elif event.modifiers() == Qt.KeyboardModifier.ControlModifier and event.key() == Qt.Key.Key_Z:
+        editing = self.is_text_editing()
+        if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
+            if editing:
+                super().keyPressEvent(event)
+            else:
+                scene.delete_selected()
+            return
+        if (
+            not editing
+            and event.modifiers() == Qt.KeyboardModifier.ControlModifier
+            and event.key() == Qt.Key.Key_Z
+        ):
             scene.undo()
-        else:
-            super().keyPressEvent(event)
+            return
+        super().keyPressEvent(event)

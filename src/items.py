@@ -30,6 +30,18 @@ HANDLE_SIZE = 8
 HANDLE_HALF = HANDLE_SIZE / 2
 
 
+def item_is_text_editing(item) -> bool:
+    """True when ``item`` is a text box currently accepting keyboard edits.
+
+    Stamps are also text items, but they never turn on text interaction, so
+    Delete still removes a selected stamp.
+    """
+    if not isinstance(item, QGraphicsTextItem):
+        return False
+    flags = item.textInteractionFlags()
+    return bool(flags & Qt.TextInteractionFlag.TextEditorInteraction)
+
+
 def _handle_color():
     pen = QPen(QColor("#000000"), 1)
     brush = QBrush(QColor("#ffffff"))
@@ -343,6 +355,16 @@ class TextItem(QGraphicsTextItem):
     def focusOutEvent(self, event):
         self.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
         super().focusOutEvent(event)
+
+    def keyPressEvent(self, event):
+        super().keyPressEvent(event)
+        # Swallow the key while editing so it cannot bubble out and delete
+        # the item the user is typing in.
+        if item_is_text_editing(self) and event.key() in (
+            Qt.Key.Key_Delete,
+            Qt.Key.Key_Backspace,
+        ):
+            event.accept()
 
     def paint(self, painter: QPainter, option, widget=None):
         # Draw faint border

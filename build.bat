@@ -1,3 +1,3 @@
 @echo off
-pyinstaller --onefile --windowed --name ProSnip src/main.py
+pyinstaller --noconfirm --clean --onefile --windowed --noupx --name ProSnip-Bob --exclude-module tkinter src/main.py
 pause

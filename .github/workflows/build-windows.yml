@@ -1,0 +1,50 @@
+name: Build ProSnip-Bob
+
+on:
+  push:
+    branches:
+      - prosnip-bob
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Create virtual environment and install dependencies
+        run: |
+          python -m venv .venv
+          .venv\Scripts\python.exe -m pip install --upgrade pip
+          .venv\Scripts\python.exe -m pip install -r requirements.txt
+
+      - name: Smoke import
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          .venv\Scripts\python.exe -c "import sys; sys.path.insert(0, 'src'); import capture, editor, canvas, items, toolbar, stamp_picker, styles, main"
+
+      - name: Build executable
+        run: |
+          $env:Path = "$PWD\.venv\Scripts;$env:Path"
+          pyinstaller --noconfirm --clean --onefile --windowed --noupx --name ProSnip-Bob --exclude-module tkinter src/main.py
+
+      - name: Upload ProSnip-Bob.exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: ProSnip-Bob
+          path: dist/ProSnip-Bob.exe
+          if-no-files-found: error
