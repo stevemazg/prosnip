@@ -726,6 +726,17 @@ class ColourAndPenTests(unittest.TestCase):
         self.assertFalse(stroke.boundingRect().isEmpty())
 
 
+class DemoFlagTests(unittest.TestCase):
+    def test_flag_is_opt_in(self):
+        import demo_screenshots
+
+        self.assertIsNone(demo_screenshots.demo_output_dir(["ProSnip-Bob.exe"]))
+        self.assertEqual(
+            demo_screenshots.demo_output_dir(["ProSnip-Bob.exe", "--demo-screenshots", "shots"]),
+            Path("shots"),
+        )
+
+
 class RecordingTests(unittest.TestCase):
     def test_helpers(self):
         self.assertEqual(recorder.even_size(101, 51), (100, 50))

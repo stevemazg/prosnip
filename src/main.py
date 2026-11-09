@@ -7,6 +7,7 @@ from PyQt6.QtCore import QObject, QThread, QTimer, Qt, QUrl, pyqtSignal
 from PyQt6.QtGui import QColor, QDesktopServices, QFont, QGuiApplication, QIcon, QPainter, QPixmap
 from PyQt6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
 
+import demo_screenshots
 from capture import CaptureOverlay
 from editor import APP_NAME, APP_VERSION, EditorWindow
 from hotkey import GlobalHotkey
@@ -486,6 +487,9 @@ def main():
     QGuiApplication.setHighDpiScaleFactorRoundingPolicy(
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
     )
+    demo_folder = demo_screenshots.demo_output_dir(sys.argv)
+    if demo_folder is not None:
+        raise SystemExit(demo_screenshots.capture_demo_screenshots(demo_folder))
     app = ProSnipApp()
     if app.forwarded:
         sys.exit(0)
