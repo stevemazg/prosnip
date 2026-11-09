@@ -35,7 +35,7 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
-          .venv\Scripts\python.exe -c "import sys; sys.path.insert(0, 'src'); import capture, editor, canvas, items, toolbar, stamp_picker, styles, hotkey, main"
+          .venv\Scripts\python.exe -c "import sys; sys.path.insert(0, 'src'); import capture, editor, canvas, items, toolbar, stamp_picker, styles, hotkey, instance, main_window, main"
 
       - name: Build executable
         run: |

@@ -22,15 +22,17 @@ if str(SRC) not in sys.path:
 from PyQt6.QtCore import QEvent, QPoint, QPointF, QRect, QRectF, Qt
 from PyQt6.QtGui import QColor, QImage, QKeyEvent, QMouseEvent, QPixmap
 from PyQt6.QtTest import QTest
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication, QSystemTrayIcon
 
 from PIL import Image
 
 import capture
 import editor
 import hotkey
+import instance
 import items
 import main
+import main_window
 
 
 def setUpModule():
@@ -47,6 +49,11 @@ def _release_host(host):
     handle = getattr(host, "_hotkey", None)
     if handle is not None:
         handle.unregister()
+    if getattr(host, "_main_window", None) is not None:
+        host._main_window.allow_close()
+        host._main_window.close()
+    if hasattr(host, "release_single_instance"):
+        host.release_single_instance()
     QApplication.processEvents()
 
 
@@ -321,6 +328,99 @@ class TextEditingTests(unittest.TestCase):
         self.assertTrue(event.isAccepted())
 
 
+class LauncherTests(unittest.TestCase):
+    def _host(self):
+        host = main.ProSnipApp()
+        self.addCleanup(_release_host, host)
+        self.assertFalse(host.forwarded)
+        return host
+
+    def test_startup_shows_the_window_with_version_and_actions(self):
+        host = self._host()
+        window = host._main_window
+        self.assertTrue(window.isVisible())
+        self.assertFalse(window.isMinimized())
+        self.assertEqual(window.windowTitle(), "ProSnip-Bob")
+        labels = [label.text() for label in window.findChildren(main_window.QLabel)]
+        self.assertIn("ProSnip-Bob", labels)
+        self.assertIn(f"Version {editor.APP_VERSION}", labels)
+        self.assertEqual(editor.APP_VERSION, "1.1.1.0")
+        self.assertEqual(window.new_capture_button.text(), "New Capture")
+        self.assertEqual(window.quit_button.text(), "Quit")
+        self.assertIn("this system", window.shortcut_label.text())
+        self.assertIn("New Capture", window.shortcut_label.text())
+
+    def test_shortcut_status_text(self):
+        self.assertEqual(main_window.shortcut_status_text(None), "Shortcut: Ctrl+Shift+S")
+        self.assertEqual(
+            main_window.shortcut_status_text(hotkey.TAKEN_MESSAGE),
+            "Shortcut unavailable (in use by another app), use New Capture.",
+        )
+
+    def test_close_hides_to_the_tray_once(self):
+        host = self._host()
+        notes = []
+        host._notify = lambda message, warning=True: notes.append(message)
+        host._main_window.close()
+        QApplication.processEvents()
+        self.assertFalse(host._main_window.isVisible())
+        host._main_window.present()
+        host._main_window.close()
+        QApplication.processEvents()
+        still = [message for message in notes if "still running" in message]
+        self.assertEqual(still, [f"{editor.APP_NAME} is still running. Click the tray icon to show it again."])
+
+    def test_tray_click_and_second_launch_restore_the_window(self):
+        host = self._host()
+        host._main_window.hide()
+        self.assertFalse(host._main_window.isVisible())
+        host._on_tray_activated(QSystemTrayIcon.ActivationReason.Trigger)
+        self.assertTrue(host._main_window.isVisible())
+        host._main_window.hide()
+        host._on_tray_activated(QSystemTrayIcon.ActivationReason.DoubleClick)
+        self.assertTrue(host._main_window.isVisible())
+        host._main_window.hide()
+        self.assertTrue(instance.try_notify_primary())
+        QTest.qWait(100)
+        self.assertTrue(host._main_window.isVisible())
+
+    def test_capture_hides_the_window_and_restores_it(self):
+        host = self._host()
+        host._do_capture = lambda: None
+        host._show_capture()
+        self.assertFalse(host._main_window.isVisible())
+        self.assertFalse(host._tray.isVisible())
+        host._on_capture_done(None)
+        self.assertTrue(host._main_window.isVisible())
+        self.assertTrue(host._tray.isVisible())
+
+        host._main_window.hide()
+        host._show_capture()
+        host._on_capture_done(None)
+        self.assertFalse(host._main_window.isVisible())
+
+    def test_quit_unregisters_the_hotkey_and_releases_the_instance(self):
+        host = self._host()
+        called = []
+        host._hotkey.unregister = lambda: called.append("hotkey")
+        host._app.quit = lambda: called.append("quit")
+        host._quit()
+        self.assertIn("hotkey", called)
+        self.assertIn("quit", called)
+        self.assertIsNone(host._server)
+
+    def test_second_claim_notifies_the_first(self):
+        calls = []
+        first_primary, first_server = instance.claim_primary(lambda: calls.append("show"))
+        self.addCleanup(instance.release_server, first_server)
+        self.assertTrue(first_primary)
+        second_primary, second_server = instance.claim_primary(lambda: calls.append("other"))
+        QTest.qWait(100)
+        self.assertFalse(second_primary)
+        self.assertIsNone(second_server)
+        self.assertEqual(calls, ["show"])
+
+
 class HotkeyTests(unittest.TestCase):
     def test_modifiers_match_the_win32_api(self):
         self.assertEqual(hotkey.MOD_CONTROL, 0x0002)
@@ -504,12 +604,13 @@ class AppTests(unittest.TestCase):
         self.assertIn("prosnip-bob", workflow)
         self.assertIn("python-version: \"3.12\"", workflow)
         self.assertIn("QT_QPA_PLATFORM: offscreen", workflow)
-        self.assertIn("hotkey, main", workflow)
+        self.assertIn("main_window, main", workflow)
         for text in (
             "Steve Maz",
             "ProSnip-Bob",
             "ProSnip-Bob screen capture and annotation tool",
-            "1.1.0.0",
+            "1.1.1.0",
+            "(1, 1, 1, 0)",
             "ProSnip-Bob.exe",
             "Copyright (C) 2026 Steve Maz",
         ):

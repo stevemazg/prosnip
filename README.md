@@ -5,7 +5,7 @@ Lightweight Windows screen-snip and annotation tool built with Python and PyQt6.
 ## Requirements
 
 - Python 3.10+ to run from source. The Windows build uses Python 3.12.
-- Windows for the packaged application. Ctrl+Shift+S is registered with the Windows `RegisterHotKey` API. On other systems, use the tray icon to capture.
+- Windows for the packaged application. Ctrl+Shift+S is registered with the Windows `RegisterHotKey` API. On other systems, use New Capture.
 
 ## Install
 
@@ -19,11 +19,15 @@ pip install -r requirements.txt
 python src/main.py
 ```
 
-ProSnip-Bob starts minimised to the system tray.
+ProSnip-Bob opens its main window when it starts. The window shows the name, the version, **New Capture**, the hotkey status and **Quit**. It is not minimised and it is brought to the front.
+
+Closing the window with the X button hides it in the notification area. The first time you do that, a tray message says ProSnip-Bob is still running. Click the tray icon, or choose **Show ProSnip-Bob**, to open the window again. **Quit** on the window or in the tray menu exits and unregisters the hotkey.
+
+Starting ProSnip-Bob again while it is already running brings the existing window to the front instead of opening a second copy.
 
 ## Capture
 
-Press **Ctrl+Shift+S** (a normal Windows hotkey, works even when the app is minimised) or click the tray icon to open the capture overlay. If another application already owns that hotkey, ProSnip-Bob reports it in the tray and capture from the tray icon still works. An overlay is shown on every connected monitor, including monitors placed to the left of or above the primary and monitors that use different scale factors (for example 150% on one screen and 100% on another). Click and drag to select a region. Press **Escape** to cancel.
+Press **Ctrl+Shift+S** (a normal Windows hotkey, including while the window is hidden) or **New Capture**. If another application already owns that hotkey, the window says the shortcut is unavailable and New Capture still works. The main window is hidden while the capture overlays are up, then restored. An overlay is shown on every connected monitor, including monitors placed to the left of or above the primary and monitors that use different scale factors (for example 150% on one screen and 100% on another). Click and drag to select a region. Press **Escape** to cancel.
 
 A second capture request is ignored while one is already open or waiting to open. Each successful snip opens its own editor window, so earlier snips stay open.
 
@@ -83,7 +87,7 @@ That runs:
 pyinstaller --noconfirm --clean --onedir --windowed --noupx --name ProSnip-Bob --exclude-module tkinter --version-file version_info.txt src/main.py
 ```
 
-Output: `dist/ProSnip-Bob/`, containing `ProSnip-Bob.exe` and `_internal`. Run `ProSnip-Bob.exe` from that folder. The executable needs `_internal` beside it. Version information in the executable names the product ProSnip-Bob, version 1.1.0.0. UPX is not used.
+Output: `dist/ProSnip-Bob/`, containing `ProSnip-Bob.exe` and `_internal`. Run `ProSnip-Bob.exe` from that folder. The executable needs `_internal` beside it. Version information in the executable names the product ProSnip-Bob, version 1.1.1.0. UPX is not used.
 
 GitHub Actions (`.github/workflows/build-windows.yml`) builds the same folder on `windows-latest` when `prosnip-bob` is pushed, and when the workflow is run by hand. It zips `dist/ProSnip-Bob/` to `ProSnip-Bob.zip` and uploads that zip as the `ProSnip-Bob` artifact.
 
@@ -95,6 +99,8 @@ ProSnip-Bob is not code-signed. Windows SmartScreen may warn the first time you 
 ProSnip-Bob/
 ├── src/
 │   ├── main.py          # Entry point, tray, logging
+│   ├── main_window.py   # Window shown at startup
+│   ├── instance.py      # Single-instance activation
 │   ├── hotkey.py        # Ctrl+Shift+S via RegisterHotKey
 │   ├── capture.py       # Per-monitor capture overlay
 │   ├── editor.py        # Main editor window

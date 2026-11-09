@@ -19,6 +19,7 @@ import math
 from PIL import Image
 
 APP_NAME = "ProSnip-Bob"
+APP_VERSION = "1.1.1.0"
 
 
 def clamp_crop_rect(rect: QRectF, width: int, height: int) -> QRect | None:

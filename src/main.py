@@ -8,8 +8,10 @@ from PyQt6.QtGui import QColor, QFont, QGuiApplication, QIcon, QPainter, QPixmap
 from PyQt6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
 
 from capture import CaptureOverlay
-from editor import APP_NAME, EditorWindow
+from editor import APP_NAME, APP_VERSION, EditorWindow
 from hotkey import GlobalHotkey
+from instance import claim_primary, release_server
+from main_window import MainWindow
 
 log = logging.getLogger("prosnip")
 
@@ -163,18 +165,33 @@ class ProSnipApp:
         self._app = app
         self._app.setQuitOnLastWindowClosed(False)
         self._app.setApplicationName(APP_NAME)
+        self._app.setApplicationVersion(APP_VERSION)
 
+        self.forwarded = False
         self._signals = AppSignals()
         self._signals.capture_done.connect(self._on_capture_done)
         self._signals.trigger_capture.connect(self._show_capture)
 
         self._tray = None
         self._hotkey: GlobalHotkey | None = None
+        self._main_window: MainWindow | None = None
+        self._server = None
+        self._main_has_been_shown = False
+        self._restore_main_after_capture = False
+        self._announced_tray = False
         self._session: CaptureOverlay | None = None
         self._capture_pending = False
         self._editors: list[EditorWindow] = []
 
+        is_primary, server = claim_primary(self._show_main_window)
+        if not is_primary:
+            self.forwarded = True
+            return
+        self._server = server
+
         self._setup_tray()
+        self._setup_main_window()
+        self._show_main_window()
         self._register_hotkey()
 
     def _capture_in_progress(self) -> bool:
@@ -185,11 +202,11 @@ class ProSnipApp:
     def _setup_tray(self):
         icon = _make_tray_icon()
         self._tray = QSystemTrayIcon(icon, self._app)
-        self._tray.setToolTip(f"{APP_NAME} — Ctrl+Shift+S to capture")
+        self._tray.setToolTip(APP_NAME)
 
         menu = QMenu()
-        action_open = menu.addAction("Open / Capture")
-        action_open.triggered.connect(self._show_capture)
+        action_show = menu.addAction(f"Show {APP_NAME}")
+        action_show.triggered.connect(self._show_main_window)
         menu.addSeparator()
         action_quit = menu.addAction(f"Quit {APP_NAME}")
         action_quit.triggered.connect(self._quit)
@@ -198,44 +215,99 @@ class ProSnipApp:
         self._tray.activated.connect(self._on_tray_activated)
         self._tray.show()
 
+    def _setup_main_window(self):
+        icon = self._tray.icon() if self._tray is not None else None
+        self._main_window = MainWindow(icon)
+        self._main_window.new_capture_requested.connect(self._show_capture)
+        self._main_window.quit_requested.connect(self._quit)
+        self._main_window.hidden_to_tray.connect(self._on_hidden_to_tray)
+
+    def _show_main_window(self, *args):
+        if self._main_window is None:
+            return
+        if self._capture_in_progress():
+            self._restore_main_after_capture = True
+            log.info("Show requested during capture; the window returns when capture ends")
+            return
+        was_visible = self._main_window.isVisible()
+        self._main_window.present()
+        if self._main_has_been_shown and not was_visible:
+            log.info("Main window restored")
+        else:
+            log.info("Main window shown")
+        self._main_has_been_shown = True
+
+    def _on_hidden_to_tray(self):
+        log.info("Main window hidden to the tray")
+        if self._announced_tray:
+            return
+        self._announced_tray = True
+        self._notify(
+            f"{APP_NAME} is still running. Click the tray icon to show it again.",
+            warning=False,
+        )
+
     def _on_tray_activated(self, reason):
-        if reason == QSystemTrayIcon.ActivationReason.Trigger:
-            self._show_capture()
+        if reason in (
+            QSystemTrayIcon.ActivationReason.Trigger,
+            QSystemTrayIcon.ActivationReason.DoubleClick,
+        ):
+            self._show_main_window()
 
     def _register_hotkey(self):
         # WM_HOTKEY is delivered on the GUI thread, so the signal is emitted
         # directly. Tray capture does not depend on this registration.
         self._hotkey = GlobalHotkey(self._signals.trigger_capture.emit)
         reason = self._hotkey.register(self._app)
+        if self._main_window is not None:
+            self._main_window.set_shortcut_status(reason)
         if reason:
             self._notify(reason)
 
-    def _notify(self, message: str):
+    def _notify(self, message: str, warning: bool = True):
         log.info("%s", message)
         if self._tray is None:
             return
         if not self._tray.isVisible():
             self._tray.show()
-        self._tray.showMessage(
-            APP_NAME,
-            message,
-            QSystemTrayIcon.MessageIcon.Warning,
-            5000,
+        icon = (
+            QSystemTrayIcon.MessageIcon.Warning
+            if warning
+            else QSystemTrayIcon.MessageIcon.Information
         )
+        self._tray.showMessage(APP_NAME, message, icon, 5000)
 
     def _show_capture(self):
         if self._capture_in_progress():
             log.info("Ignoring a capture request because a capture is already open")
             return
         self._capture_pending = True
+        self._restore_main_after_capture = (
+            self._main_window is not None and self._main_window.isVisible()
+        )
         try:
-            self._tray.hide()
+            self._hide_for_capture()
             QTimer.singleShot(150, self._do_capture)
         except Exception:
             log.exception("Failed to start capture")
             self._capture_pending = False
-            self._tray.show()
+            self._restore_after_capture()
             self._notify("Could not start the capture. See the log for details.")
+
+    def _hide_for_capture(self):
+        if self._main_window is not None and self._main_window.isVisible():
+            self._main_window.hide()
+            log.info("Main window hidden for capture")
+        if self._tray is not None:
+            self._tray.hide()
+
+    def _restore_after_capture(self):
+        if self._tray is not None and not self._tray.isVisible():
+            self._tray.show()
+        should_restore = self._restore_main_after_capture
+        self._restore_main_after_capture = False
+        if should_restore:
+            self._show_main_window()
 
     def _do_capture(self):
         if self._session is not None and self._session.is_active:
@@ -251,7 +323,7 @@ class ProSnipApp:
             if session is not None:
                 session.abandon()
             self._capture_pending = False
-            self._tray.show()
+            self._restore_after_capture()
             self._notify("Could not start the capture. See the log for details.")
 
     def _on_capture_result(self, pil_image):
@@ -261,8 +333,7 @@ class ProSnipApp:
     def _on_capture_done(self, pil_image):
         self._capture_pending = False
         self._session = None
-        if self._tray is not None:
-            self._tray.show()
+        self._restore_after_capture()
         if pil_image is None:
             return
         try:
@@ -283,12 +354,20 @@ class ProSnipApp:
     def _forget_editor(self, editor):
         self._editors = [existing for existing in self._editors if existing is not editor]
 
+    def release_single_instance(self):
+        release_server(self._server)
+        self._server = None
+
     def _quit(self):
+        if self._main_window is not None:
+            self._main_window.allow_close()
+            self._main_window.close()
         try:
             if self._hotkey is not None:
                 self._hotkey.unregister()
         except Exception:
             log.exception("Failed to unregister the hotkey")
+        self.release_single_instance()
         self._app.quit()
 
     def run(self):
@@ -304,6 +383,8 @@ def main():
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
     )
     app = ProSnipApp()
+    if app.forwarded:
+        sys.exit(0)
     app.run()
 
 
