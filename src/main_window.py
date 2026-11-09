@@ -40,6 +40,7 @@ def _bring_to_front(window: QWidget) -> None:
 
 class MainWindow(QMainWindow):
     new_capture_requested = pyqtSignal()
+    record_requested = pyqtSignal()
     quit_requested = pyqtSignal()
     hidden_to_tray = pyqtSignal()
 
@@ -49,7 +50,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(APP_NAME)
         if icon is not None:
             self.setWindowIcon(icon)
-        self.setMinimumSize(380, 240)
+        self.setMinimumSize(380, 300)
         self._build()
 
     def _build(self):
@@ -108,6 +109,10 @@ class MainWindow(QMainWindow):
         self.new_capture_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.new_capture_button.clicked.connect(lambda: self.new_capture_requested.emit())
 
+        self.record_button = QPushButton("Record")
+        self.record_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.record_button.clicked.connect(lambda: self.record_requested.emit())
+
         self.shortcut_label = QLabel(shortcut_status_text(None))
         self.shortcut_label.setObjectName("shortcut")
         self.shortcut_label.setWordWrap(True)
@@ -120,6 +125,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(version)
         layout.addSpacing(8)
         layout.addWidget(self.new_capture_button)
+        layout.addWidget(self.record_button)
         layout.addWidget(self.shortcut_label)
         layout.addStretch(1)
         layout.addWidget(self.quit_button)

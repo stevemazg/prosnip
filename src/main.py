@@ -3,8 +3,8 @@ import os
 import sys
 from pathlib import Path
 
-from PyQt6.QtCore import QObject, QThread, QTimer, Qt, pyqtSignal
-from PyQt6.QtGui import QColor, QFont, QGuiApplication, QIcon, QPainter, QPixmap
+from PyQt6.QtCore import QObject, QThread, QTimer, Qt, QUrl, pyqtSignal
+from PyQt6.QtGui import QColor, QDesktopServices, QFont, QGuiApplication, QIcon, QPainter, QPixmap
 from PyQt6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
 
 from capture import CaptureOverlay
@@ -12,6 +12,7 @@ from editor import APP_NAME, APP_VERSION, EditorWindow
 from hotkey import GlobalHotkey
 from instance import claim_primary, release_server
 from main_window import MainWindow
+from recorder import GrabSource, RecordDialog, ScreenRecorder, WindowGrabSource, video_output_path
 
 log = logging.getLogger("prosnip")
 
@@ -180,6 +181,9 @@ class ProSnipApp:
         self._restore_main_after_capture = False
         self._announced_tray = False
         self._session: CaptureOverlay | None = None
+        self._recording: ScreenRecorder | None = None
+        self._record_fps = 15
+        self._stop_recording_action = None
         self._capture_pending = False
         self._editors: list[EditorWindow] = []
 
@@ -207,6 +211,13 @@ class ProSnipApp:
         menu = QMenu()
         action_show = menu.addAction(f"Show {APP_NAME}")
         action_show.triggered.connect(self._show_main_window)
+        record_menu = menu.addMenu("Record")
+        record_menu.addAction("Monitor…", lambda: self._open_record_dialog("monitor"))
+        record_menu.addAction("Region…", lambda: self._open_record_dialog("region"))
+        record_menu.addAction("Window…", lambda: self._open_record_dialog("window"))
+        self._stop_recording_action = menu.addAction("Stop recording")
+        self._stop_recording_action.triggered.connect(self._stop_recording)
+        self._stop_recording_action.setVisible(False)
         menu.addSeparator()
         action_quit = menu.addAction(f"Quit {APP_NAME}")
         action_quit.triggered.connect(self._quit)
@@ -219,6 +230,7 @@ class ProSnipApp:
         icon = self._tray.icon() if self._tray is not None else None
         self._main_window = MainWindow(icon)
         self._main_window.new_capture_requested.connect(self._show_capture)
+        self._main_window.record_requested.connect(lambda: self._open_record_dialog("monitor"))
         self._main_window.quit_requested.connect(self._quit)
         self._main_window.hidden_to_tray.connect(self._on_hidden_to_tray)
 
@@ -341,6 +353,98 @@ class ProSnipApp:
         except Exception:
             log.exception("Failed to open the editor")
             self._notify("Could not open the editor. See the log for details.")
+
+    def _open_record_dialog(self, mode: str = "monitor"):
+        if self._recording is not None and self._recording.is_active:
+            self._notify("A recording is already in progress. Use Stop recording.")
+            return
+        dialog = RecordDialog(mode, self._main_window)
+        if dialog.exec() != dialog.DialogCode.Accepted:
+            return
+        self._record_fps = dialog.fps()
+        chosen = dialog.mode()
+        if chosen == "region":
+            self._start_region_recording()
+            return
+        if chosen == "window":
+            hwnd = dialog.hwnd()
+            if hwnd <= 0:
+                self._notify("Choose an application window to record. A browser tab cannot be recorded on its own.")
+                return
+            self._begin_recording(WindowGrabSource(hwnd))
+            return
+        screen = dialog.screen()
+        if screen is None:
+            self._notify("No monitor is available to record.")
+            return
+        self._begin_recording(GrabSource(screen, None))
+
+    def _start_region_recording(self):
+        self._restore_main_after_capture = (
+            self._main_window is not None and self._main_window.isVisible()
+        )
+        try:
+            self._hide_for_capture()
+            self._session = CaptureOverlay(self._on_record_region, kind="region")
+            self._session.show()
+        except Exception:
+            log.exception("Could not start a region recording")
+            self._session = None
+            self._restore_after_capture()
+            self._notify("Could not start the region selection. See the log for details.")
+
+    def _on_record_region(self, region):
+        self._session = None
+        if self._tray is not None and not self._tray.isVisible():
+            self._tray.show()
+        if region is None:
+            self._restore_after_capture()
+            return
+        # Keep the main window hidden until recording stops so it is not in the shot.
+        self._begin_recording(GrabSource(region.screen, region.physical_rect))
+
+    def _begin_recording(self, source):
+        try:
+            path = video_output_path()
+            recorder = ScreenRecorder(source, path, self._record_fps)
+            recorder.finished.connect(self._on_recording_finished)
+            recorder.failed.connect(self._on_recording_failed)
+            self._recording = recorder
+            if self._main_window is not None and self._main_window.isVisible():
+                self._restore_main_after_capture = True
+                self._main_window.hide()
+                log.info("Main window hidden for capture")
+            recorder.start()
+            self._set_recording_indicator(True)
+        except Exception:
+            log.exception("Could not start recording")
+            self._recording = None
+            self._restore_after_capture()
+            self._notify("Could not start recording. See the log for details.")
+
+    def _stop_recording(self):
+        if self._recording is not None and self._recording.is_active:
+            self._recording.stop()
+
+    def _on_recording_finished(self, path: str):
+        self._set_recording_indicator(False)
+        self._recording = None
+        self._restore_after_capture()
+        log.info("Recording saved: %s", path)
+        self._notify(f"Recording saved to {path}", warning=False)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(Path(path).parent)))
+
+    def _on_recording_failed(self, message: str):
+        self._set_recording_indicator(False)
+        self._recording = None
+        self._restore_after_capture()
+        self._notify(message or "Recording failed. See the log for details.")
+
+    def _set_recording_indicator(self, recording: bool):
+        if self._stop_recording_action is not None:
+            self._stop_recording_action.setVisible(recording)
+        if self._tray is not None:
+            self._tray.setToolTip(f"{APP_NAME} — recording" if recording else APP_NAME)
 
     def _open_editor(self, pil_image):
         editor = EditorWindow(pil_image)

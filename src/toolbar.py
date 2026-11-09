@@ -5,7 +5,10 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtGui import QPixmap, QPainter, QColor, QIcon, QPen, QBrush, QFont
 from PyQt6.QtCore import pyqtSignal, Qt, QSize
 
-from styles import STYLES, QuickStyle, DEFAULT_STYLE
+from styles import (
+    STYLES, QuickStyle, DEFAULT_STYLE,
+    apply_combo_contrast, colour_swatch_icon,
+)
 from stamp_picker import StampPickerDialog
 
 
@@ -91,6 +94,19 @@ def _icon_image(p, s):
     p.drawLine(14, s - 10, s - 3, s - 8)
 
 
+def _icon_pen(p, s):
+    pen = QPen(QColor("#e63946"), 2, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
+    p.setPen(pen)
+    p.drawLine(5, s - 6, s - 8, 8)
+    p.drawLine(s - 8, 8, s - 4, 5)
+
+
+def _icon_highlight(p, s):
+    pen = QPen(QColor(244, 162, 97, 200), 6, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap)
+    p.setPen(pen)
+    p.drawLine(4, s // 2, s - 4, s // 2 + 2)
+
+
 def _icon_crop(p, s):
     p.setPen(QPen(QColor("#cccccc"), 2))
     # L-shape guides
@@ -104,6 +120,8 @@ TOOL_DEFS = [
     ("select",  "Select",       _icon_select),
     ("arrow",   "Arrow",        _icon_arrow),
     ("text",    "Text",         _icon_text),
+    ("pen",     "Pen (P)",      _icon_pen),
+    ("highlight", "Highlighter (H)", _icon_highlight),
     ("callout", "Callout",      _icon_callout),
     ("stamp",   "Stamp",        _icon_stamp),
     ("rect",    "Rectangle",    _icon_rect),
@@ -136,7 +154,7 @@ class ToolBar(QWidget):
         self._tool_buttons = {}
         self._pen_color = DEFAULT_STYLE.pen_color
         self._build_ui()
-        self.setFixedWidth(56)
+        self.setFixedWidth(72)
         self.setStyleSheet("""
             QWidget { background-color: #1e1e1e; }
             QPushButton {
@@ -171,6 +189,7 @@ class ToolBar(QWidget):
                 font-size: 9px;
             }
         """)
+        apply_combo_contrast(self._style_combo)
 
     def _build_ui(self):
         layout = QVBoxLayout(self)
@@ -198,9 +217,11 @@ class ToolBar(QWidget):
         lbl_style.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(lbl_style)
         self._style_combo = QComboBox()
-        self._style_combo.setFixedHeight(24)
-        for name in STYLES:
-            self._style_combo.addItem(name)
+        self._style_combo.setFixedHeight(26)
+        for name, style in STYLES.items():
+            self._style_combo.addItem(colour_swatch_icon(style.pen_color), name)
+        apply_combo_contrast(self._style_combo)
+        self._style_combo.setToolTip(self._style_combo.currentText())
         self._style_combo.currentTextChanged.connect(self._on_style_changed)
         layout.addWidget(self._style_combo)
 
@@ -217,7 +238,8 @@ class ToolBar(QWidget):
         lbl_lw.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(lbl_lw)
         self._lw_spin = QSpinBox()
-        self._lw_spin.setRange(1, 10)
+        self._lw_spin.setRange(1, 16)
+        self._lw_spin.setToolTip("Line and pen thickness (2, 4, 8, 12)")
         self._lw_spin.setValue(DEFAULT_STYLE.line_width)
         self._lw_spin.setFixedHeight(24)
         self._lw_spin.valueChanged.connect(self.line_width_changed.emit)
@@ -277,6 +299,7 @@ class ToolBar(QWidget):
             self._update_color_btn()
             self._lw_spin.setValue(style.line_width)
             self._fs_spin.setValue(style.font_size)
+            self._style_combo.setToolTip(name)
             self.style_changed.emit(style)
 
     def _on_pick_color(self):

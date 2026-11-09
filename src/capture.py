@@ -33,6 +33,16 @@ log = logging.getLogger(__name__)
 MIN_SELECTION = 5
 
 
+class RegionSelection:
+    """A dragged rectangle on one monitor, in that monitor's pixels."""
+
+    def __init__(self, screen, physical_rect: QRect, logical_rect: QRect, screen_geometry: QRect):
+        self.screen = screen
+        self.physical_rect = QRect(physical_rect)
+        self.logical_rect = QRect(logical_rect)
+        self.screen_geometry = QRect(screen_geometry)
+
+
 def map_widget_rect_to_pixmap(
     selection: QRect,
     widget_width: int,
@@ -296,6 +306,22 @@ class _ScreenOverlay(QWidget):
                 self.width(),
                 self.height(),
             )
+            if self._session.kind == "region":
+                physical = map_widget_rect_to_pixmap(
+                    selection, self.width(), self.height(),
+                    self._pixmap.width(), self._pixmap.height(),
+                )
+                if physical.isEmpty():
+                    self._session.finish(None)
+                else:
+                    self._session.finish(RegionSelection(
+                        self.screen_ref,
+                        physical,
+                        selection,
+                        self.screen_ref.geometry(),
+                    ))
+                event.accept()
+                return
             image = qpixmap_to_pil(crop) if crop is not None else None
         except Exception:
             log.exception("Failed to crop the selection")
@@ -324,8 +350,9 @@ class CaptureOverlay:
     when the snip is cancelled.
     """
 
-    def __init__(self, callback, screens=None):
+    def __init__(self, callback, screens=None, kind="image"):
         self._callback = callback
+        self.kind = kind if kind in ("image", "region") else "image"
         self._finished = False
         self._closed = False
         self._result = None

@@ -8,8 +8,10 @@ including a 150% scale factor and a monitor that lives at a negative origin.
 import ctypes
 import logging
 import os
+import queue
 import sys
 import unittest
+from datetime import datetime
 from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -22,10 +24,11 @@ if str(SRC) not in sys.path:
 from PyQt6.QtCore import QEvent, QPoint, QPointF, QRect, QRectF, Qt
 from PyQt6.QtGui import QColor, QImage, QKeyEvent, QMouseEvent, QPixmap
 from PyQt6.QtTest import QTest
-from PyQt6.QtWidgets import QApplication, QSystemTrayIcon
+from PyQt6.QtWidgets import QApplication, QSystemTrayIcon, QWidget
 
 from PIL import Image
 
+import canvas
 import capture
 import editor
 import hotkey
@@ -33,6 +36,9 @@ import instance
 import items
 import main
 import main_window
+import recorder
+import toolbar
+import window_list
 
 
 def setUpModule():
@@ -344,7 +350,7 @@ class LauncherTests(unittest.TestCase):
         labels = [label.text() for label in window.findChildren(main_window.QLabel)]
         self.assertIn("ProSnip-Bob", labels)
         self.assertIn(f"Version {editor.APP_VERSION}", labels)
-        self.assertEqual(editor.APP_VERSION, "1.1.1.0")
+        self.assertEqual(editor.APP_VERSION, "1.2.0.0")
         self.assertEqual(window.new_capture_button.text(), "New Capture")
         self.assertEqual(window.quit_button.text(), "Quit")
         self.assertIn("this system", window.shortcut_label.text())
@@ -592,7 +598,7 @@ class AppTests(unittest.TestCase):
         command = (
             "pyinstaller --noconfirm --clean --onedir --windowed --noupx "
             "--name ProSnip-Bob --exclude-module tkinter "
-            "--version-file version_info.txt src/main.py"
+            "--collect-data imageio_ffmpeg --version-file version_info.txt src/main.py"
         )
         self.assertIn(command, build)
         self.assertIn(command, workflow)
@@ -604,13 +610,13 @@ class AppTests(unittest.TestCase):
         self.assertIn("prosnip-bob", workflow)
         self.assertIn("python-version: \"3.12\"", workflow)
         self.assertIn("QT_QPA_PLATFORM: offscreen", workflow)
-        self.assertIn("main_window, main", workflow)
+        self.assertIn("recorder, main", workflow)
         for text in (
             "Steve Maz",
             "ProSnip-Bob",
             "ProSnip-Bob screen capture and annotation tool",
-            "1.1.1.0",
-            "(1, 1, 1, 0)",
+            "1.2.0.0",
+            "(1, 2, 0, 0)",
             "ProSnip-Bob.exe",
             "Copyright (C) 2026 Steve Maz",
         ):
@@ -640,6 +646,107 @@ class AppTests(unittest.TestCase):
                 sys.frozen = old_frozen
             elif hasattr(sys, "frozen"):
                 delattr(sys, "frozen")
+
+
+class ColourAndPenTests(unittest.TestCase):
+    def test_style_menu_shows_swatches_and_light_text(self):
+        from PyQt6.QtGui import QPalette
+        from styles import STYLES, colour_swatch
+
+        bar = toolbar.ToolBar()
+        combo = bar._style_combo
+        self.assertEqual(combo.count(), len(STYLES))
+        for index in range(combo.count()):
+            self.assertFalse(combo.itemIcon(index).isNull())
+        swatch = colour_swatch(QColor("#e63946"), 16).toImage()
+        self.assertEqual(swatch.pixelColor(8, 8).name(), "#e63946")
+        self.assertEqual(swatch.pixelColor(1, 1).name(), "#f2f2f2")
+        text = combo.view().palette().color(QPalette.ColorRole.Text)
+        self.assertGreater(text.lightness(), 180)
+        self.assertGreaterEqual(combo.view().minimumWidth(), 200)
+
+    def test_selected_style_sets_the_pen_colour(self):
+        from styles import STYLES
+
+        scene = canvas.ProSnipScene()
+        bar = toolbar.ToolBar()
+        bar.style_changed.connect(lambda style: scene.set_pen_color(style.pen_color))
+        bar._style_combo.setCurrentText("Blue")
+        self.assertEqual(scene._pen_color.name(), STYLES["Blue"].pen_color.name())
+
+    def test_pen_stroke_can_be_undone_and_redone(self):
+        scene = canvas.ProSnipScene()
+        scene.set_tool("pen")
+        scene.set_pen_color(QColor("#e63946"))
+        scene.set_line_width(4)
+
+        class _Event:
+            def __init__(self, x, y, release=False):
+                self._pos = QPointF(x, y)
+                self._release = release
+
+            def button(self):
+                return Qt.MouseButton.LeftButton
+
+            def scenePos(self):
+                return self._pos
+
+            def accept(self):
+                return None
+
+        scene.mousePressEvent(_Event(10, 12))
+        scene.mouseMoveEvent(_Event(30, 40))
+        scene.mouseMoveEvent(_Event(50, 18))
+        scene.mouseReleaseEvent(_Event(55, 22, release=True))
+        strokes = [item for item in scene.items() if isinstance(item, items.StrokeItem)]
+        self.assertEqual(len(strokes), 1)
+        stroke = strokes[0]
+        self.assertGreaterEqual(len(stroke._points), 3)
+        self.assertFalse(stroke.highlighter)
+        self.assertEqual(stroke.line_width, 4)
+        self.assertEqual(scene._tool, "pen")
+        scene.undo()
+        self.assertEqual(
+            [item for item in scene.items() if isinstance(item, items.StrokeItem)],
+            [],
+        )
+        scene.redo()
+        self.assertEqual(
+            len([item for item in scene.items() if isinstance(item, items.StrokeItem)]),
+            1,
+        )
+
+    def test_highlighter_is_translucent_and_thick(self):
+        stroke = items.StrokeItem(QColor("#f4a261"), 2, highlighter=True)
+        self.assertTrue(stroke.highlighter)
+        self.assertEqual(stroke.line_width, 12)
+        self.assertLess(stroke.pen_color.alpha(), 255)
+        stroke.add_point(QPointF(0, 0))
+        stroke.add_point(QPointF(20, 0))
+        self.assertFalse(stroke.boundingRect().isEmpty())
+
+
+class RecordingTests(unittest.TestCase):
+    def test_helpers(self):
+        self.assertEqual(recorder.even_size(101, 51), (100, 50))
+        self.assertEqual(recorder.even_size(1, 1), (2, 2))
+        path = recorder.video_output_path(datetime(2026, 11, 9, 11, 17, 5))
+        self.assertEqual(path.name, "ProSnip-Bob_20261109_111705.mp4")
+        self.assertEqual(path.parent.name, "ProSnip-Bob")
+        self.assertEqual(path.parent.parent.name, "Videos")
+        self.assertEqual(window_list.list_toplevel_windows(), [] if sys.platform != "win32" else window_list.list_toplevel_windows())
+        self.assertFalse(recorder.exclude_from_capture(QWidget()))
+        self.assertEqual(recorder.WDA_EXCLUDEFROMCAPTURE, 0x11)
+
+    def test_frame_queue_stays_bounded(self):
+        frames = queue.Queue(maxsize=recorder.QUEUE_LIMIT)
+        for index in range(6):
+            recorder.enqueue_frame(frames, bytes([index]))
+        self.assertLessEqual(frames.qsize(), recorder.QUEUE_LIMIT)
+        kept = []
+        while not frames.empty():
+            kept.append(frames.get_nowait()[0])
+        self.assertEqual(kept, [4, 5])
 
 
 if __name__ == "__main__":

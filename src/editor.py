@@ -19,7 +19,7 @@ import math
 from PIL import Image
 
 APP_NAME = "ProSnip-Bob"
-APP_VERSION = "1.1.1.0"
+APP_VERSION = "1.2.0.0"
 
 
 def clamp_crop_rect(rect: QRectF, width: int, height: int) -> QRect | None:
@@ -205,6 +205,9 @@ class EditorWindow(QMainWindow):
         QShortcut(QKeySequence("Ctrl+S"), self).activated.connect(self._save_png)
         QShortcut(QKeySequence("Ctrl+Shift+C"), self).activated.connect(self._copy_clipboard)
         QShortcut(QKeySequence("Ctrl+Z"), self).activated.connect(self._scene.undo)
+        QShortcut(QKeySequence("Ctrl+Y"), self).activated.connect(self._scene.redo)
+        QShortcut(QKeySequence("P"), self).activated.connect(self._select_pen)
+        QShortcut(QKeySequence("H"), self).activated.connect(self._select_highlighter)
         QShortcut(QKeySequence(Qt.Key.Key_Delete), self).activated.connect(self._on_delete_shortcut)
         QShortcut(QKeySequence("Escape"), self).activated.connect(
             lambda: self._on_tool_changed("select")
@@ -230,6 +233,16 @@ class EditorWindow(QMainWindow):
             item,
             QKeyEvent(QEvent.Type.KeyPress, key, Qt.KeyboardModifier.NoModifier),
         )
+
+    def _select_pen(self):
+        if self._view.is_text_editing():
+            return
+        self._on_tool_changed("pen")
+
+    def _select_highlighter(self):
+        if self._view.is_text_editing():
+            return
+        self._on_tool_changed("highlight")
 
     def _on_tool_changed(self, tool: str):
         self._scene.set_tool(tool)

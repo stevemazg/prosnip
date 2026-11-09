@@ -10,7 +10,8 @@ from PyQt6.QtCore import Qt, QRectF, QPointF, QEvent, pyqtSignal
 
 from items import (
     ArrowItem, TextItem, CalloutItem, StampItem,
-    RectItem, EllipseItem, ImageOverlayItem, item_is_text_editing
+    RectItem, EllipseItem, ImageOverlayItem, StrokeItem,
+    item_is_text_editing,
 )
 from stamp_picker import StampPickerDialog
 from styles import DEFAULT_STYLE
@@ -26,6 +27,7 @@ class ProSnipScene(QGraphicsScene):
         self._current_item = None
         self._press_pos = QPointF()
         self._undo_stack = []
+        self._redo_stack = []
         self._last_stamp = None
         self._crop_rect_item = None
 
@@ -59,17 +61,27 @@ class ProSnipScene(QGraphicsScene):
 
     def _push_undo(self, item):
         self._undo_stack.append(item)
+        self._redo_stack.clear()
         self.tool_used.emit(item)
 
     def undo(self):
         if self._undo_stack:
             item = self._undo_stack.pop()
             self.removeItem(item)
+            self._redo_stack.append(item)
+
+    def redo(self):
+        if self._redo_stack:
+            item = self._redo_stack.pop()
+            self.addItem(item)
+            self._undo_stack.append(item)
 
     def delete_selected(self):
         for item in self.selectedItems():
             if item in self._undo_stack:
                 self._undo_stack.remove(item)
+            if item in self._redo_stack:
+                self._redo_stack.remove(item)
             self.removeItem(item)
 
     def mousePressEvent(self, event):
@@ -87,6 +99,17 @@ class ProSnipScene(QGraphicsScene):
 
         if tool == "arrow":
             item = ArrowItem(pos, pos, self._pen_color, self._line_width)
+            self.addItem(item)
+            self._current_item = item
+            event.accept()
+
+        elif tool in ("pen", "highlight"):
+            item = StrokeItem(
+                self._pen_color,
+                self._line_width,
+                highlighter=(tool == "highlight"),
+            )
+            item.add_point(pos)
             self.addItem(item)
             self._current_item = item
             event.accept()
@@ -182,6 +205,10 @@ class ProSnipScene(QGraphicsScene):
                 item._update_handles()
                 item.update()
 
+            elif tool in ("pen", "highlight"):
+                self._current_item.add_point(pos)
+                return
+
             elif tool == "callout":
                 item = self._current_item
                 r = QRectF(self._press_pos, pos).normalized()
@@ -209,7 +236,9 @@ class ProSnipScene(QGraphicsScene):
             item = self._current_item
             self._push_undo(item)
             self._current_item = None
-            self._tool = "select"
+            if tool not in ("pen", "highlight"):
+                self._tool = "select"
+            return
 
         elif tool == "crop" and self._crop_rect_item is not None:
             r = self._crop_rect_item.rect()
@@ -237,8 +266,8 @@ class _CanvasViewport(QWidget):
     def event(self, event):
         if (
             event.type() == QEvent.Type.ShortcutOverride
-            and event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace)
             and self._view.is_text_editing()
+            and _text_keeps_key(event)
         ):
             event.accept()
             return True
@@ -265,8 +294,8 @@ class ProSnipView(QGraphicsView):
     def event(self, event):
         if (
             event.type() == QEvent.Type.ShortcutOverride
-            and event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace)
             and self.is_text_editing()
+            and _text_keeps_key(event)
         ):
             event.accept()
             return True
@@ -288,4 +317,30 @@ class ProSnipView(QGraphicsView):
         ):
             scene.undo()
             return
+        if (
+            not editing
+            and event.modifiers() == Qt.KeyboardModifier.ControlModifier
+            and event.key() == Qt.Key.Key_Y
+        ):
+            scene.redo()
+            return
         super().keyPressEvent(event)
+
+
+def _text_keeps_key(event) -> bool:
+    """Keys the text editor must receive instead of a window shortcut."""
+    key = event.key()
+    mods = event.modifiers()
+    if mods == Qt.KeyboardModifier.NoModifier and key in (
+        Qt.Key.Key_Delete,
+        Qt.Key.Key_Backspace,
+        Qt.Key.Key_P,
+        Qt.Key.Key_H,
+    ):
+        return True
+    if mods == Qt.KeyboardModifier.ControlModifier and key in (
+        Qt.Key.Key_Z,
+        Qt.Key.Key_Y,
+    ):
+        return True
+    return False

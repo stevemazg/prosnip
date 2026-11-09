@@ -576,3 +576,68 @@ class ImageOverlayItem(ResizableMixin, QGraphicsPixmapItem):
 
     def itemChange(self, change, value):
         return ResizableMixin.itemChange(self, change, value)
+
+
+class StrokeItem(QGraphicsItem):
+    """One freehand stroke. Points stay in the item's local coordinates."""
+
+    def __init__(self, color: QColor, width: int, highlighter: bool = False):
+        super().__init__()
+        self.highlighter = highlighter
+        self.line_width = max(1, int(width))
+        self.pen_color = QColor(color)
+        if highlighter:
+            self.pen_color.setAlpha(96)
+            self.line_width = max(self.line_width, 12)
+        self._points: list[QPointF] = []
+        self._path = QPainterPath()
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, True)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges, True)
+
+    def add_point(self, point: QPointF) -> None:
+        self.prepareGeometryChange()
+        self._points.append(QPointF(point))
+        self._rebuild()
+        self.update()
+
+    def _rebuild(self) -> None:
+        points = self._points
+        path = QPainterPath()
+        if not points:
+            self._path = path
+            return
+        path.moveTo(points[0])
+        if len(points) == 2:
+            path.lineTo(points[1])
+        elif len(points) > 2:
+            for index in range(1, len(points) - 1):
+                current = points[index]
+                nxt = points[index + 1]
+                mid = QPointF(
+                    (current.x() + nxt.x()) / 2.0,
+                    (current.y() + nxt.y()) / 2.0,
+                )
+                path.quadTo(current, mid)
+            path.lineTo(points[-1])
+        self._path = path
+
+    def boundingRect(self) -> QRectF:
+        extra = self.line_width / 2.0 + 2.0
+        return self._path.boundingRect().adjusted(-extra, -extra, extra, extra)
+
+    def paint(self, painter: QPainter, option, widget=None):
+        pen = QPen(
+            self.pen_color,
+            self.line_width,
+            Qt.PenStyle.SolidLine,
+            Qt.PenCapStyle.RoundCap,
+            Qt.PenJoinStyle.RoundJoin,
+        )
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        if len(self._points) == 1:
+            painter.drawPoint(self._points[0])
+        elif len(self._points) > 1:
+            painter.drawPath(self._path)

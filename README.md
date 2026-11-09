@@ -31,6 +31,14 @@ Press **Ctrl+Shift+S** (a normal Windows hotkey, including while the window is h
 
 A second capture request is ignored while one is already open or waiting to open. Each successful snip opens its own editor window, so earlier snips stay open.
 
+## Recording
+
+**Record**, next to New Capture and in the tray menu, records a whole monitor, a dragged region, or one application window. There is no sound. A browser tab cannot be recorded on its own; choose the browser window. The recording follows that window's area on the screen, so if another window covers it, the covering window is what is recorded.
+
+A small **REC** control stays on top while recording (elapsed time, Pause/Resume, Stop). It is excluded from the video where Windows allows that. The tray tooltip says "recording", and **Stop recording** appears in the tray menu. Frames are streamed to a bundled ffmpeg encoder (H.264 MP4, 15–30 frames per second), so a long recording does not keep every frame in memory.
+
+Files are saved as `Videos\ProSnip-Bob\ProSnip-Bob_YYYYMMDD_HHMMSS.mp4`. ProSnip-Bob then opens that folder and shows the path in the tray. The build bundles ffmpeg (`imageio-ffmpeg`) so the folder build can encode H.264 without a separate install.
+
 ## Annotation Tools
 
 | Tool | Description |
@@ -38,6 +46,8 @@ A second capture request is ignored while one is already open or waiting to open
 | Select | Move/resize/select items |
 | Arrow | Draw an arrow line |
 | Text | Click to place editable text. Double-click to edit. |
+| Pen | Freehand stroke in the current colour and width (2, 4, 8 or 12 px, or the Width spinner). Press **P**. Each stroke can be moved, deleted, undone (Ctrl+Z) and redone (Ctrl+Y). |
+| Highlighter | A thick, semi-transparent stroke in the current colour. Press **H**. |
 | Callout | Draw a callout bubble. Double-click to edit text. |
 | Stamp | Choose an emoji stamp (✅ ❌ ⚠️ 👍 💡 etc.) |
 | Rectangle | Draw a filled rectangle |
@@ -45,7 +55,7 @@ A second capture request is ignored while one is already open or waiting to open
 | Image | Insert an image overlay (picture-on-picture) |
 | Crop | Drag to crop the canvas |
 
-Use the **Quick Styles** dropdown to apply colour and style presets (Red, Blue, Green, Corporate, High Contrast, Yellow Highlight).
+Use the **Style** dropdown to apply colour and style presets (Red, Blue, Green, Corporate, High Contrast, Yellow Highlight). Each item shows a colour swatch and light text on a dark menu, and the closed list shows the current swatch. The chosen colour is used for new annotations, including the pen.
 
 ## Resize Handles
 
@@ -68,6 +78,9 @@ Select any annotation item and drag the white square handles to resize it.
 | Ctrl+S | Save as PNG |
 | Ctrl+Shift+C | Copy to clipboard |
 | Ctrl+Z | Undo last annotation |
+| Ctrl+Y | Redo last undone annotation |
+| P | Pen tool (while not editing text) |
+| H | Highlighter (while not editing text) |
 | Delete / Backspace | Delete selected items. While a text box is being edited, these keys edit the text instead. |
 | Escape | Switch to the Select tool (cancels a capture while the overlay is open) |
 
@@ -84,10 +97,10 @@ build.bat
 That runs:
 
 ```bat
-pyinstaller --noconfirm --clean --onedir --windowed --noupx --name ProSnip-Bob --exclude-module tkinter --version-file version_info.txt src/main.py
+pyinstaller --noconfirm --clean --onedir --windowed --noupx --name ProSnip-Bob --exclude-module tkinter --collect-data imageio_ffmpeg --version-file version_info.txt src/main.py
 ```
 
-Output: `dist/ProSnip-Bob/`, containing `ProSnip-Bob.exe` and `_internal`. Run `ProSnip-Bob.exe` from that folder. The executable needs `_internal` beside it. Version information in the executable names the product ProSnip-Bob, version 1.1.1.0. UPX is not used.
+Output: `dist/ProSnip-Bob/`, containing `ProSnip-Bob.exe` and `_internal`. Run `ProSnip-Bob.exe` from that folder. The executable needs `_internal` beside it. Version information in the executable names the product ProSnip-Bob, version 1.2.0.0. UPX is not used.
 
 GitHub Actions (`.github/workflows/build-windows.yml`) builds the same folder on `windows-latest` when `prosnip-bob` is pushed, and when the workflow is run by hand. It zips `dist/ProSnip-Bob/` to `ProSnip-Bob.zip` and uploads that zip as the `ProSnip-Bob` artifact.
 
@@ -102,6 +115,8 @@ ProSnip-Bob/
 │   ├── main_window.py   # Window shown at startup
 │   ├── instance.py      # Single-instance activation
 │   ├── hotkey.py        # Ctrl+Shift+S via RegisterHotKey
+│   ├── recorder.py      # Screen recording and REC control
+│   ├── window_list.py   # Visible windows for recording |
 │   ├── capture.py       # Per-monitor capture overlay
 │   ├── editor.py        # Main editor window
 │   ├── canvas.py        # QGraphicsScene + QGraphicsView

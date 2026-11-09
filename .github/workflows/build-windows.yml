@@ -35,12 +35,12 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
-          .venv\Scripts\python.exe -c "import sys; sys.path.insert(0, 'src'); import capture, editor, canvas, items, toolbar, stamp_picker, styles, hotkey, instance, main_window, main"
+          .venv\Scripts\python.exe -c "import sys; sys.path.insert(0, 'src'); import capture, editor, canvas, items, toolbar, stamp_picker, styles, hotkey, instance, main_window, window_list, recorder, main"
 
       - name: Build executable
         run: |
           $env:Path = "$PWD\.venv\Scripts;$env:Path"
-          pyinstaller --noconfirm --clean --onedir --windowed --noupx --name ProSnip-Bob --exclude-module tkinter --version-file version_info.txt src/main.py
+          pyinstaller --noconfirm --clean --onedir --windowed --noupx --name ProSnip-Bob --exclude-module tkinter --collect-data imageio_ffmpeg --version-file version_info.txt src/main.py
 
       - name: Zip application folder
         run: |
