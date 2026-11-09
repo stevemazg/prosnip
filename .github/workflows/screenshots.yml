@@ -2,6 +2,12 @@ name: Screenshots
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - prosnip-bob
+    paths:
+      - ".github/workflows/screenshots.yml"
+      - "src/demo_screenshots.py"
 
 permissions:
   contents: read
