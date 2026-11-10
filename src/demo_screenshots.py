@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 
 from PIL import Image, ImageDraw
-from PyQt6.QtCore import QPointF, QRect, QRectF, Qt
+from PyQt6.QtCore import QPoint, QPointF, QRect, QRectF, Qt
 from PyQt6.QtGui import QBrush, QColor, QGuiApplication, QPen
 from PyQt6.QtWidgets import QApplication
 
@@ -42,6 +42,7 @@ def capture_demo_screenshots(folder: Path) -> int:
         saved.append(_stamp_picker(folder / "08-stamp-picker.png"))
         saved.append(_text_background(folder / "09-text-background.png"))
         saved.append(_image_placeholder(editor, folder / "10-image-placeholder.png"))
+        saved.append(_toolbar_tooltip(editor, folder / "11-toolbar-tooltip.png"))
         editor.close()
         saved.append(_record_dialog(folder / "04-record-picker.png"))
         saved.append(_rec_control(folder / "05-rec-control.png"))
@@ -203,6 +204,28 @@ def _image_placeholder(editor, path: Path) -> Path:
         return _grab(editor, path)
     finally:
         editor._scene.removeItem(frame)
+
+
+def _toolbar_tooltip(editor, path: Path) -> Path:
+    from PyQt6.QtWidgets import QToolTip
+
+    button = editor._toolbar._tool_buttons["arrow"]
+    editor.show()
+    app = QApplication.instance()
+    if app is not None:
+        app.processEvents()
+    anchor = button.mapToGlobal(QPoint(button.width() // 2, button.height() // 2))
+    QToolTip.showText(anchor, button.toolTip(), button, button.rect(), 30000)
+    if app is not None:
+        app.processEvents()
+    tip = None
+    for widget in QApplication.topLevelWidgets():
+        if widget.isVisible() and widget.windowFlags() & Qt.WindowType.ToolTip:
+            tip = widget
+            break
+    if tip is None:
+        raise RuntimeError("The Arrow tooltip did not appear")
+    return _grab(tip, path)
 
 
 def _record_dialog(path: Path) -> Path:

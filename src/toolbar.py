@@ -123,18 +123,18 @@ def _icon_crop(p, s):
 
 
 TOOL_DEFS = [
-    ("select",  "Select",       _icon_select),
-    ("arrow",   "Arrow",        _icon_arrow),
-    ("text",    "Text",         _icon_text),
-    ("pen",     "Pen (P)",      _icon_pen),
+    ("select",  "Select",           _icon_select),
+    ("arrow",   "Arrow (A)",        _icon_arrow),
+    ("text",    "Text (T)",         _icon_text),
+    ("pen",     "Pen (P)",          _icon_pen),
     ("highlight", "Highlighter (H)", _icon_highlight),
-    ("callout", "Callout",      _icon_callout),
-    ("stamp",   "Stamp",        _icon_stamp),
-    ("rect",    "Rectangle",    _icon_rect),
-    ("ellipse", "Ellipse",      _icon_ellipse),
-    ("image",   "Image",        _icon_image),
-    ("pick",    "Pick colour",  _icon_pick),
-    ("crop",    "Crop",         _icon_crop),
+    ("callout", "Callout",          _icon_callout),
+    ("stamp",   "Stamp",            _icon_stamp),
+    ("rect",    "Rectangle (R)",    _icon_rect),
+    ("ellipse", "Ellipse (E)",      _icon_ellipse),
+    ("image",   "Image",            _icon_image),
+    ("pick",    "Pick colour",      _icon_pick),
+    ("crop",    "Crop",             _icon_crop),
 ]
 
 

@@ -93,6 +93,31 @@ def colour_swatch_icon(color: QColor, size: int = 16) -> QIcon:
     return QIcon(colour_swatch(color, size))
 
 
+TOOLTIP_STYLE = """
+QToolTip {
+    background-color: #141414;
+    color: #ffffff;
+    border: 1px solid #ffffff;
+    padding: 8px 12px;
+    font-size: 12pt;
+    font-weight: 600;
+}
+"""
+
+
+def install_tooltip_style() -> None:
+    """Large, high-contrast tooltips. Points scale with the screen DPI."""
+    from PyQt6.QtWidgets import QApplication
+
+    app = QApplication.instance()
+    if app is None:
+        return
+    current = app.styleSheet() or ""
+    if "QToolTip" in current:
+        return
+    app.setStyleSheet(current + TOOLTIP_STYLE)
+
+
 def apply_combo_contrast(combo) -> None:
     """Make a style combo readable and wide enough to show the colour name."""
     combo.setStyleSheet(COMBO_STYLE)

@@ -13,14 +13,14 @@ from PyQt6.QtGui import (
 from canvas import ProSnipScene, ProSnipView
 from properties import PropertiesPanel
 from toolbar import ToolBar
-from styles import QuickStyle
+from styles import QuickStyle, install_tooltip_style
 
 import io
 import math
 from PIL import Image
 
 APP_NAME = "ProSnip-Bob"
-APP_VERSION = "1.3.0.0"
+APP_VERSION = "1.3.1.0"
 
 
 def clamp_crop_rect(rect: QRectF, width: int, height: int) -> QRect | None:
@@ -130,6 +130,7 @@ class EditorWindow(QMainWindow):
         self._bg_item = None
 
         self.setWindowTitle(f"{APP_NAME} — Untitled")
+        install_tooltip_style()
         self.setMinimumSize(900, 600)
         self.setStyleSheet("background-color: #2b2b2b;")
 
@@ -171,9 +172,9 @@ class EditorWindow(QMainWindow):
             btn.setFixedHeight(30)
             return btn
 
-        self._btn_save_png = _tb_btn("Save PNG", "Save as PNG (Ctrl+S)")
-        self._btn_save_jpg = _tb_btn("Save JPG", "Save as JPG")
-        self._btn_copy = _tb_btn("Copy", "Copy to clipboard (Ctrl+Shift+C)")
+        self._btn_save_png = _tb_btn("Save PNG", "Save PNG (Ctrl+S)")
+        self._btn_save_jpg = _tb_btn("Save JPG", "Save JPG")
+        self._btn_copy = _tb_btn("Copy", "Copy (Ctrl+Shift+C)")
         self._btn_resize = _tb_btn("Resize…", "Resize canvas")
 
         for btn in [self._btn_save_png, self._btn_save_jpg, self._btn_copy, self._btn_resize]:
@@ -219,8 +220,12 @@ class EditorWindow(QMainWindow):
         QShortcut(QKeySequence("Ctrl+Shift+C"), self).activated.connect(self._copy_clipboard)
         QShortcut(QKeySequence("Ctrl+Z"), self).activated.connect(self._scene.undo)
         QShortcut(QKeySequence("Ctrl+Y"), self).activated.connect(self._scene.redo)
-        QShortcut(QKeySequence("P"), self).activated.connect(self._select_pen)
-        QShortcut(QKeySequence("H"), self).activated.connect(self._select_highlighter)
+        QShortcut(QKeySequence("A"), self).activated.connect(lambda: self._select_tool("arrow"))
+        QShortcut(QKeySequence("T"), self).activated.connect(lambda: self._select_tool("text"))
+        QShortcut(QKeySequence("P"), self).activated.connect(lambda: self._select_tool("pen"))
+        QShortcut(QKeySequence("H"), self).activated.connect(lambda: self._select_tool("highlight"))
+        QShortcut(QKeySequence("R"), self).activated.connect(lambda: self._select_tool("rect"))
+        QShortcut(QKeySequence("E"), self).activated.connect(lambda: self._select_tool("ellipse"))
         QShortcut(QKeySequence(Qt.Key.Key_Delete), self).activated.connect(self._on_delete_shortcut)
         QShortcut(QKeySequence("Escape"), self).activated.connect(
             lambda: self._on_tool_changed("select")
@@ -247,15 +252,10 @@ class EditorWindow(QMainWindow):
             QKeyEvent(QEvent.Type.KeyPress, key, Qt.KeyboardModifier.NoModifier),
         )
 
-    def _select_pen(self):
+    def _select_tool(self, tool: str):
         if self._view.is_text_editing():
             return
-        self._on_tool_changed("pen")
-
-    def _select_highlighter(self):
-        if self._view.is_text_editing():
-            return
-        self._on_tool_changed("highlight")
+        self._on_tool_changed(tool)
 
     def _on_tool_changed(self, tool: str):
         self._scene.set_tool(tool)

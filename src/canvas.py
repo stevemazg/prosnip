@@ -421,8 +421,12 @@ def _text_keeps_key(event) -> bool:
     if mods == Qt.KeyboardModifier.NoModifier and key in (
         Qt.Key.Key_Delete,
         Qt.Key.Key_Backspace,
+        Qt.Key.Key_A,
+        Qt.Key.Key_T,
         Qt.Key.Key_P,
         Qt.Key.Key_H,
+        Qt.Key.Key_R,
+        Qt.Key.Key_E,
     ):
         return True
     if mods == Qt.KeyboardModifier.ControlModifier and key in (

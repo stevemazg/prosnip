@@ -351,7 +351,7 @@ class LauncherTests(unittest.TestCase):
         labels = [label.text() for label in window.findChildren(main_window.QLabel)]
         self.assertIn("ProSnip-Bob", labels)
         self.assertIn(f"Version {editor.APP_VERSION}", labels)
-        self.assertEqual(editor.APP_VERSION, "1.3.0.0")
+        self.assertEqual(editor.APP_VERSION, "1.3.1.0")
         self.assertEqual(window.new_capture_button.text(), "New Capture")
         self.assertEqual(window.quit_button.text(), "Quit")
         self.assertIn("this system", window.shortcut_label.text())
@@ -497,7 +497,9 @@ class AppTests(unittest.TestCase):
         window = editor.EditorWindow(Image.new("RGB", (10, 10), "white"))
         self.addCleanup(window.close)
         self.assertEqual(window.windowTitle(), "ProSnip-Bob — Untitled")
-        self.assertEqual(window._btn_copy.toolTip(), "Copy to clipboard (Ctrl+Shift+C)")
+        self.assertEqual(window._btn_copy.toolTip(), "Copy (Ctrl+Shift+C)")
+        self.assertEqual(window._btn_save_png.toolTip(), "Save PNG (Ctrl+S)")
+        self.assertEqual(window._btn_copy.text(), "Copy")
 
     def test_second_capture_is_ignored_while_one_is_open(self):
         host = main.ProSnipApp()
@@ -616,8 +618,8 @@ class AppTests(unittest.TestCase):
             "Steve Maz",
             "ProSnip-Bob",
             "ProSnip-Bob screen capture and annotation tool",
-            "1.3.0.0",
-            "(1, 3, 0, 0)",
+            "1.3.1.0",
+            "(1, 3, 1, 0)",
             "ProSnip-Bob.exe",
             "Copyright (C) 2026 Steve Maz",
         ):
@@ -650,6 +652,21 @@ class AppTests(unittest.TestCase):
 
 
 class ColourAndPenTests(unittest.TestCase):
+    def test_toolbar_buttons_use_tooltips_not_captions(self):
+        from styles import TOOLTIP_STYLE, install_tooltip_style
+
+        bar = toolbar.ToolBar()
+        arrow = bar._tool_buttons["arrow"]
+        pen = bar._tool_buttons["pen"]
+        self.assertEqual(arrow.text(), "")
+        self.assertEqual(pen.text(), "")
+        self.assertEqual(arrow.toolTip(), "Arrow (A)")
+        self.assertEqual(pen.toolTip(), "Pen (P)")
+        self.assertEqual(bar._tool_buttons["highlight"].toolTip(), "Highlighter (H)")
+        install_tooltip_style()
+        self.assertIn("font-size: 12pt", TOOLTIP_STYLE)
+        self.assertIn("color: #ffffff", QApplication.instance().styleSheet())
+
     def test_style_menu_shows_swatches_and_light_text(self):
         from PyQt6.QtGui import QPalette
         from styles import STYLES, colour_swatch
@@ -775,6 +792,15 @@ class PaintPathTests(unittest.TestCase):
         painter.end()
         self.assertFalse(image.isNull())
         self.assertGreater(image.pixelColor(40, 40).alpha(), 0)
+        # Tapered arrow is thin at the tail and has a wide head just before the tip.
+        # Index 4 runs from (20, 212) to (180, 224).
+        head = image.pixelColor(152, 214)
+        tail_off = image.pixelColor(36, 198)
+        self.assertLess(abs(head.red() - 0x1D) + abs(head.green() - 0x35) + abs(head.blue() - 0x57), 80)
+        self.assertGreater(
+            abs(tail_off.red() - 0x1D) + abs(tail_off.green() - 0x35) + abs(tail_off.blue() - 0x57),
+            80,
+        )
 
     def test_dark_swatches_have_a_light_outline(self):
         from styles import colour_swatch

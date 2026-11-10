@@ -101,7 +101,7 @@ That runs:
 pyinstaller --noconfirm --clean --onedir --windowed --noupx --name ProSnip-Bob --exclude-module tkinter --collect-data imageio_ffmpeg --version-file version_info.txt src/main.py
 ```
 
-Output: `dist/ProSnip-Bob/`, containing `ProSnip-Bob.exe` and `_internal`. Run `ProSnip-Bob.exe` from that folder. The executable needs `_internal` beside it. Version information in the executable names the product ProSnip-Bob, version 1.3.0.0. UPX is not used.
+Output: `dist/ProSnip-Bob/`, containing `ProSnip-Bob.exe` and `_internal`. Run `ProSnip-Bob.exe` from that folder. The executable needs `_internal` beside it. Version information in the executable names the product ProSnip-Bob, version 1.3.1.0. UPX is not used.
 
 GitHub Actions (`.github/workflows/build-windows.yml`) builds the same folder on `windows-latest` when `prosnip-bob` is pushed, and when the workflow is run by hand. It zips `dist/ProSnip-Bob/` to `ProSnip-Bob.zip` and uploads that zip as the `ProSnip-Bob` artifact.
 
