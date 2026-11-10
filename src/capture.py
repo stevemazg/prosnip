@@ -20,6 +20,7 @@ from PyQt6.QtGui import (
     QGuiApplication,
     QImage,
     QKeySequence,
+    QBrush,
     QPainter,
     QPen,
     QPixmap,
@@ -257,7 +258,7 @@ class _ScreenOverlay(QWidget):
                 if not source.isEmpty():
                     painter.drawPixmap(selection, self._pixmap, source)
                 painter.setPen(QPen(QColor("#ff0000"), 2, Qt.PenStyle.DashLine))
-                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.setBrush(QBrush(Qt.BrushStyle.NoBrush))
                 painter.drawRect(selection.adjusted(0, 0, -1, -1))
         painter.end()
 

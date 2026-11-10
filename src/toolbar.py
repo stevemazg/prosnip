@@ -41,7 +41,7 @@ def _icon_arrow(p, s):
     p.setPen(pen)
     p.drawLine(4, s - 4, s - 4, 4)
     p.setBrush(QBrush(QColor("#e63946")))
-    p.setPen(Qt.PenStyle.NoPen)
+    p.setPen(QPen(Qt.PenStyle.NoPen))
     from PyQt6.QtCore import QPoint
     from PyQt6.QtGui import QPolygon
     tip = QPoint(s - 4, 4)
@@ -107,6 +107,12 @@ def _icon_highlight(p, s):
     p.drawLine(4, s // 2, s - 4, s // 2 + 2)
 
 
+def _icon_pick(p, s):
+    p.setPen(QPen(QColor("#f2f2f2"), 2))
+    p.drawEllipse(6, 6, s - 14, s - 14)
+    p.drawLine(s - 8, s - 8, s - 3, s - 3)
+
+
 def _icon_crop(p, s):
     p.setPen(QPen(QColor("#cccccc"), 2))
     # L-shape guides
@@ -127,6 +133,7 @@ TOOL_DEFS = [
     ("rect",    "Rectangle",    _icon_rect),
     ("ellipse", "Ellipse",      _icon_ellipse),
     ("image",   "Image",        _icon_image),
+    ("pick",    "Pick colour",  _icon_pick),
     ("crop",    "Crop",         _icon_crop),
 ]
 
@@ -154,7 +161,7 @@ class ToolBar(QWidget):
         self._tool_buttons = {}
         self._pen_color = DEFAULT_STYLE.pen_color
         self._build_ui()
-        self.setFixedWidth(72)
+        self.setFixedWidth(156)
         self.setStyleSheet("""
             QWidget { background-color: #1e1e1e; }
             QPushButton {
@@ -185,8 +192,13 @@ class ToolBar(QWidget):
                 font-size: 10px;
             }
             QLabel {
-                color: #888888;
-                font-size: 9px;
+                color: #f2f2f2;
+                font-size: 13px;
+                font-weight: 600;
+            }
+            QComboBox, QSpinBox {
+                font-size: 13px;
+                min-height: 22px;
             }
         """)
         apply_combo_contrast(self._style_combo)
@@ -201,8 +213,8 @@ class ToolBar(QWidget):
             btn = QPushButton()
             btn.setCheckable(True)
             btn.setIcon(_make_icon(icon_fn))
-            btn.setIconSize(QSize(24, 24))
-            btn.setFixedHeight(36)
+            btn.setIconSize(QSize(34, 34))
+            btn.setFixedHeight(48)
             btn.setToolTip(label)
             btn.clicked.connect(lambda checked, t=tool_id: self._on_tool_clicked(t))
             self._tool_buttons[tool_id] = btn
@@ -241,7 +253,7 @@ class ToolBar(QWidget):
         self._lw_spin.setRange(1, 16)
         self._lw_spin.setToolTip("Line and pen thickness (2, 4, 8, 12)")
         self._lw_spin.setValue(DEFAULT_STYLE.line_width)
-        self._lw_spin.setFixedHeight(24)
+        self._lw_spin.setFixedHeight(32)
         self._lw_spin.valueChanged.connect(self.line_width_changed.emit)
         layout.addWidget(self._lw_spin)
 
@@ -252,7 +264,7 @@ class ToolBar(QWidget):
         self._fs_spin = QSpinBox()
         self._fs_spin.setRange(8, 48)
         self._fs_spin.setValue(DEFAULT_STYLE.font_size)
-        self._fs_spin.setFixedHeight(24)
+        self._fs_spin.setFixedHeight(32)
         self._fs_spin.valueChanged.connect(self.font_size_changed.emit)
         layout.addWidget(self._fs_spin)
 
@@ -315,6 +327,10 @@ class ToolBar(QWidget):
         self._color_btn.setIcon(QIcon(pix))
         self._color_btn.setIconSize(QSize(32, 16))
         self._color_btn.setToolTip(f"Pen colour: {self._pen_color.name()}")
+
+    def set_pen_colour(self, color: QColor):
+        self._pen_color = QColor(color)
+        self._update_color_btn()
 
     def set_tool(self, tool_id: str):
         for tid, btn in self._tool_buttons.items():

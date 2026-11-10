@@ -10,6 +10,7 @@ import logging
 import os
 import queue
 import sys
+import tempfile
 import unittest
 from datetime import datetime
 from pathlib import Path
@@ -22,7 +23,7 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from PyQt6.QtCore import QEvent, QPoint, QPointF, QRect, QRectF, Qt
-from PyQt6.QtGui import QColor, QImage, QKeyEvent, QMouseEvent, QPixmap
+from PyQt6.QtGui import QBrush, QColor, QImage, QKeyEvent, QMouseEvent, QPainter, QPen, QPixmap
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication, QSystemTrayIcon, QWidget
 
@@ -350,7 +351,7 @@ class LauncherTests(unittest.TestCase):
         labels = [label.text() for label in window.findChildren(main_window.QLabel)]
         self.assertIn("ProSnip-Bob", labels)
         self.assertIn(f"Version {editor.APP_VERSION}", labels)
-        self.assertEqual(editor.APP_VERSION, "1.2.0.0")
+        self.assertEqual(editor.APP_VERSION, "1.3.0.0")
         self.assertEqual(window.new_capture_button.text(), "New Capture")
         self.assertEqual(window.quit_button.text(), "Quit")
         self.assertIn("this system", window.shortcut_label.text())
@@ -615,8 +616,8 @@ class AppTests(unittest.TestCase):
             "Steve Maz",
             "ProSnip-Bob",
             "ProSnip-Bob screen capture and annotation tool",
-            "1.2.0.0",
-            "(1, 2, 0, 0)",
+            "1.3.0.0",
+            "(1, 3, 0, 0)",
             "ProSnip-Bob.exe",
             "Copyright (C) 2026 Steve Maz",
         ):
@@ -724,6 +725,79 @@ class ColourAndPenTests(unittest.TestCase):
         stroke.add_point(QPointF(0, 0))
         stroke.add_point(QPointF(20, 0))
         self.assertFalse(stroke.boundingRect().isEmpty())
+
+
+class PaintPathTests(unittest.TestCase):
+    def test_every_annotation_paints(self):
+        from PyQt6.QtWidgets import QGraphicsPixmapItem, QGraphicsRectItem
+
+        scene = canvas.ProSnipScene()
+        background = QPixmap(480, 320)
+        background.fill(QColor("#d7e6f5"))
+        background.setDevicePixelRatio(1.0)
+        plate = QGraphicsPixmapItem(background)
+        plate.setZValue(-100)
+        scene.addItem(plate)
+        scene.setSceneRect(0, 0, 480, 320)
+        scene.addItem(items.RectItem(QRectF(20, 20, 80, 50), QColor("#e63946"), QColor(230, 57, 70, 60), 3))
+        scene.addItem(items.EllipseItem(QRectF(120, 20, 70, 50), QColor("#2d6a4f"), QColor(45, 106, 79, 50), 2))
+        for index, style in enumerate(items.ARROW_STYLES):
+            scene.addItem(items.ArrowItem(
+                QPointF(20, 100 + index * 28),
+                QPointF(180, 112 + index * 28),
+                QColor("#1d3557"),
+                6,
+                style,
+            ))
+        scene.addItem(items.TextItem("Hello", QPointF(220, 40), QColor("#111111"), 16))
+        scene.addItem(items.CalloutItem(QPointF(220, 160), QColor("#003049"), QColor(0, 48, 73, 40), QColor("#003049"), 2, 12))
+        scene.addItem(items.StampItem("✅", QPointF(360, 40)))
+        pen = items.StrokeItem(QColor("#e63946"), 4)
+        pen.add_point(QPointF(220, 260))
+        pen.add_point(QPointF(300, 280))
+        pen.add_point(QPointF(380, 250))
+        scene.addItem(pen)
+        highlight = items.StrokeItem(QColor("#f4a261"), 8, highlighter=True)
+        highlight.add_point(QPointF(220, 300))
+        highlight.add_point(QPointF(400, 300))
+        scene.addItem(highlight)
+        overlay = QPixmap(40, 30)
+        overlay.fill(QColor("#ffffff"))
+        scene.addItem(items.ImageOverlayItem(overlay, QPointF(400, 200)))
+        rubber = QGraphicsRectItem(QRectF(10, 10, 30, 20))
+        rubber.setPen(QPen(QColor("#ffffff"), 2, Qt.PenStyle.DashLine))
+        rubber.setBrush(QBrush(Qt.BrushStyle.NoBrush))
+        scene.addItem(rubber)
+        image = QImage(480, 320, QImage.Format.Format_ARGB32)
+        image.fill(Qt.GlobalColor.white)
+        painter = QPainter(image)
+        scene.render(painter)
+        painter.end()
+        self.assertFalse(image.isNull())
+        self.assertGreater(image.pixelColor(40, 40).alpha(), 0)
+
+    def test_dark_swatches_have_a_light_outline(self):
+        from styles import colour_swatch
+
+        blue = colour_swatch(QColor("#1d3557"), 16).toImage()
+        self.assertEqual(blue.pixelColor(2, 2).name(), "#ffffff")
+        self.assertEqual(blue.pixelColor(8, 8).name(), "#1d3557")
+
+    def test_custom_stamp_is_stored(self):
+        import os
+        from stamp_picker import add_custom_stamp, custom_stamp_paths
+
+        with tempfile.TemporaryDirectory() as tmp:
+            os.environ["APPDATA"] = tmp
+            source = Path(tmp) / "mark.png"
+            pixmap = QPixmap(16, 16)
+            pixmap.fill(QColor("#e63946"))
+            pixmap.save(str(source), "PNG")
+            saved = add_custom_stamp(str(source))
+            self.assertIsNotNone(saved)
+            self.assertTrue(saved.is_file())
+            self.assertIn(saved, custom_stamp_paths())
+            self.assertEqual(saved.parent, Path(tmp) / "ProSnip-Bob" / "stamps")
 
 
 class DemoFlagTests(unittest.TestCase):

@@ -43,7 +43,8 @@ Files are saved as `Videos\ProSnip-Bob\ProSnip-Bob_YYYYMMDD_HHMMSS.mp4`. ProSnip
 
 | Tool | Description |
 |------|-------------|
-| Select | Move/resize/select items |
+| Select | Move, resize and select items. The properties panel edits colour, opacity and outline after placement. |
+| Pick colour | Eyedropper. Click the captured image to sample a colour. |
 | Arrow | Draw an arrow line |
 | Text | Click to place editable text. Double-click to edit. |
 | Pen | Freehand stroke in the current colour and width (2, 4, 8 or 12 px, or the Width spinner). Press **P**. Each stroke can be moved, deleted, undone (Ctrl+Z) and redone (Ctrl+Y). |
@@ -52,7 +53,7 @@ Files are saved as `Videos\ProSnip-Bob\ProSnip-Bob_YYYYMMDD_HHMMSS.mp4`. ProSnip
 | Stamp | Choose an emoji stamp (✅ ❌ ⚠️ 👍 💡 etc.) |
 | Rectangle | Draw a filled rectangle |
 | Ellipse | Draw a filled ellipse |
-| Image | Insert an image overlay (picture-on-picture) |
+| Image | Drag a frame, then choose a picture. The picture fills that frame and stays resizable. |
 | Crop | Drag to crop the canvas |
 
 Use the **Style** dropdown to apply colour and style presets (Red, Blue, Green, Corporate, High Contrast, Yellow Highlight). Each item shows a colour swatch and light text on a dark menu, and the closed list shows the current swatch. The chosen colour is used for new annotations, including the pen.
@@ -100,7 +101,7 @@ That runs:
 pyinstaller --noconfirm --clean --onedir --windowed --noupx --name ProSnip-Bob --exclude-module tkinter --collect-data imageio_ffmpeg --version-file version_info.txt src/main.py
 ```
 
-Output: `dist/ProSnip-Bob/`, containing `ProSnip-Bob.exe` and `_internal`. Run `ProSnip-Bob.exe` from that folder. The executable needs `_internal` beside it. Version information in the executable names the product ProSnip-Bob, version 1.2.0.0. UPX is not used.
+Output: `dist/ProSnip-Bob/`, containing `ProSnip-Bob.exe` and `_internal`. Run `ProSnip-Bob.exe` from that folder. The executable needs `_internal` beside it. Version information in the executable names the product ProSnip-Bob, version 1.3.0.0. UPX is not used.
 
 GitHub Actions (`.github/workflows/build-windows.yml`) builds the same folder on `windows-latest` when `prosnip-bob` is pushed, and when the workflow is run by hand. It zips `dist/ProSnip-Bob/` to `ProSnip-Bob.zip` and uploads that zip as the `ProSnip-Bob` artifact.
 

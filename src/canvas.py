@@ -20,6 +20,7 @@ from styles import DEFAULT_STYLE
 class ProSnipScene(QGraphicsScene):
     crop_requested = pyqtSignal(QRectF)
     tool_used = pyqtSignal(object)  # emits the new item added
+    colour_picked = pyqtSignal(QColor)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -37,6 +38,9 @@ class ProSnipScene(QGraphicsScene):
         self._text_color = DEFAULT_STYLE.text_color
         self._line_width = DEFAULT_STYLE.line_width
         self._font_size = DEFAULT_STYLE.font_size
+        self.arrow_style = "plain"
+        self.item_opacity = 1.0
+        self._image_rect_item = None
 
     def set_tool(self, tool: str):
         self._tool = tool
@@ -55,6 +59,54 @@ class ProSnipScene(QGraphicsScene):
 
     def set_font_size(self, s: int):
         self._font_size = s
+
+    @property
+    def pen_color(self):
+        return self._pen_color
+
+    @property
+    def line_width(self):
+        return self._line_width
+
+    @property
+    def font_size(self):
+        return self._font_size
+
+    def _place(self, item):
+        item.setOpacity(self.item_opacity)
+        self.addItem(item)
+        return item
+
+    def sample_background(self, pos: QPointF) -> QColor | None:
+        for item in self.items():
+            if isinstance(item, QGraphicsPixmapItem) and item.zValue() < 0:
+                local = item.mapFromScene(pos)
+                image = item.pixmap().toImage()
+                x, y = int(local.x()), int(local.y())
+                if 0 <= x < image.width() and 0 <= y < image.height():
+                    return image.pixelColor(x, y)
+        return None
+
+    def _finish_image_frame(self, frame: QRectF):
+        if frame.width() < 8 or frame.height() < 8:
+            return
+        path, _ = QFileDialog.getOpenFileName(
+            None, "Open Image", "",
+            "Images (*.png *.jpg *.jpeg *.bmp *.gif *.webp *.svg)",
+        )
+        if not path:
+            return
+        pixmap = QPixmap(path)
+        if path.lower().endswith(".svg"):
+            pixmap = _svg_pixmap(path, int(frame.width()), int(frame.height()))
+        if pixmap.isNull():
+            return
+        item = ImageOverlayItem(pixmap, frame.topLeft())
+        item._set_rect(QRectF(0, 0, max(8, frame.width()), max(8, frame.height())))
+        item.setOpacity(self.item_opacity)
+        self.addItem(item)
+        self._push_undo(item)
+        self._tool = "select"
 
     def set_last_stamp(self, stamp: str):
         self._last_stamp = stamp
@@ -98,19 +150,26 @@ class ProSnipScene(QGraphicsScene):
             return
 
         if tool == "arrow":
-            item = ArrowItem(pos, pos, self._pen_color, self._line_width)
-            self.addItem(item)
+            item = self._place(ArrowItem(
+                pos, pos, self._pen_color, max(6, self._line_width), self.arrow_style,
+            ))
             self._current_item = item
             event.accept()
 
+        elif tool == "pick":
+            colour = self.sample_background(pos)
+            if colour is not None and colour.isValid():
+                self.set_pen_color(colour)
+                self.colour_picked.emit(colour)
+            event.accept()
+
         elif tool in ("pen", "highlight"):
-            item = StrokeItem(
+            item = self._place(StrokeItem(
                 self._pen_color,
                 self._line_width,
                 highlighter=(tool == "highlight"),
-            )
+            ))
             item.add_point(pos)
-            self.addItem(item)
             self._current_item = item
             event.accept()
 
@@ -137,7 +196,15 @@ class ProSnipScene(QGraphicsScene):
                     event.accept()
                     return
                 self._last_stamp = stamp
-            item = StampItem(stamp, pos)
+            if stamp.startswith("image:"):
+                pixmap = QPixmap(stamp[6:])
+                if pixmap.isNull():
+                    event.accept()
+                    return
+                item = ImageOverlayItem(pixmap, pos)
+            else:
+                item = StampItem(stamp, pos)
+            item.setOpacity(self.item_opacity)
             self.addItem(item)
             self._push_undo(item)
             self._current_item = None
@@ -157,24 +224,17 @@ class ProSnipScene(QGraphicsScene):
             event.accept()
 
         elif tool == "image":
-            path, _ = QFileDialog.getOpenFileName(
-                None, "Open Image", "",
-                "Images (*.png *.jpg *.jpeg *.bmp *.gif *.webp)"
-            )
-            if path:
-                pixmap = QPixmap(path)
-                if not pixmap.isNull():
-                    item = ImageOverlayItem(pixmap, pos)
-                    self.addItem(item)
-                    self._push_undo(item)
-            self._tool = "select"
+            self._image_rect_item = QGraphicsRectItem(QRectF(pos, pos))
+            self._image_rect_item.setPen(QPen(QColor("#ffffff"), 2, Qt.PenStyle.DashLine))
+            self._image_rect_item.setBrush(QBrush(QColor(255, 255, 255, 40)))
+            self.addItem(self._image_rect_item)
             event.accept()
 
         elif tool == "crop":
             self._crop_rect_item = QGraphicsRectItem(QRectF(pos, pos))
             pen = QPen(QColor("#ffffff"), 2, Qt.PenStyle.DashLine)
             self._crop_rect_item.setPen(pen)
-            self._crop_rect_item.setBrush(Qt.BrushStyle.NoBrush)
+            self._crop_rect_item.setBrush(QBrush(Qt.BrushStyle.NoBrush))
             self.addItem(self._crop_rect_item)
             event.accept()
 
@@ -222,6 +282,9 @@ class ProSnipScene(QGraphicsScene):
             r = QRectF(self._press_pos, pos).normalized()
             self._crop_rect_item.setRect(r)
 
+        elif tool == "image" and self._image_rect_item is not None:
+            self._image_rect_item.setRect(QRectF(self._press_pos, pos).normalized())
+
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
@@ -247,6 +310,14 @@ class ProSnipScene(QGraphicsScene):
             self._tool = "select"
             if r.width() > 4 and r.height() > 4:
                 self.crop_requested.emit(r)
+            return
+
+        elif tool == "image" and self._image_rect_item is not None:
+            frame = self._image_rect_item.rect().normalized()
+            self.removeItem(self._image_rect_item)
+            self._image_rect_item = None
+            self._finish_image_frame(frame)
+            return
 
         super().mouseReleaseEvent(event)
 
@@ -325,6 +396,22 @@ class ProSnipView(QGraphicsView):
             scene.redo()
             return
         super().keyPressEvent(event)
+
+
+def _svg_pixmap(path: str, width: int, height: int) -> QPixmap:
+    try:
+        from PyQt6.QtSvg import QSvgRenderer
+    except ImportError:
+        return QPixmap()
+    renderer = QSvgRenderer(path)
+    if not renderer.isValid():
+        return QPixmap()
+    pixmap = QPixmap(max(8, width), max(8, height))
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    renderer.render(painter)
+    painter.end()
+    return pixmap
 
 
 def _text_keeps_key(event) -> bool:

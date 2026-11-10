@@ -75,13 +75,16 @@ QAbstractItemView::item:selected {
 
 
 def colour_swatch(color: QColor, size: int = 16) -> QPixmap:
-    """Filled swatch with a thin light border so it shows on a dark menu."""
+    """Filled swatch. Dark colours get a thicker light outline so they stay visible."""
     pixmap = QPixmap(size, size)
     pixmap.fill(Qt.GlobalColor.transparent)
     painter = QPainter(pixmap)
-    painter.setPen(QPen(QColor("#f2f2f2"), 1))
+    dark = color.lightness() < 90
+    border = QColor("#ffffff") if dark else QColor("#f2f2f2")
+    painter.setPen(QPen(border, 2 if dark else 1))
     painter.setBrush(QBrush(QColor(color)))
-    painter.drawRect(1, 1, size - 3, size - 3)
+    inset = 2 if dark else 1
+    painter.drawRect(inset, inset, size - inset * 2 - 1, size - inset * 2 - 1)
     painter.end()
     return pixmap
 

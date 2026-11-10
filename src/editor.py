@@ -2,7 +2,7 @@ from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
     QToolBar, QPushButton, QFileDialog, QDialog,
     QFormLayout, QSpinBox, QCheckBox, QDialogButtonBox,
-    QGraphicsPixmapItem, QApplication, QLabel
+    QGraphicsPixmapItem, QApplication, QLabel, QScrollArea
 )
 from PyQt6.QtCore import Qt, QRectF, QEvent, QRect
 from PyQt6.QtGui import (
@@ -11,6 +11,7 @@ from PyQt6.QtGui import (
 )
 
 from canvas import ProSnipScene, ProSnipView
+from properties import PropertiesPanel
 from toolbar import ToolBar
 from styles import QuickStyle
 
@@ -19,7 +20,7 @@ import math
 from PIL import Image
 
 APP_NAME = "ProSnip-Bob"
-APP_VERSION = "1.2.0.0"
+APP_VERSION = "1.3.0.0"
 
 
 def clamp_crop_rect(rect: QRectF, width: int, height: int) -> QRect | None:
@@ -143,6 +144,7 @@ class EditorWindow(QMainWindow):
 
     def _setup_background(self):
         pixmap = pil_to_qpixmap(self._pil_image)
+        pixmap.setDevicePixelRatio(1.0)
         self._bg_item = QGraphicsPixmapItem(pixmap)
         self._bg_item.setZValue(-100)
         self._scene.addItem(self._bg_item)
@@ -183,13 +185,24 @@ class EditorWindow(QMainWindow):
         hlayout = QHBoxLayout(central)
         hlayout.setContentsMargins(0, 0, 0, 0)
         hlayout.setSpacing(0)
-        hlayout.addWidget(self._toolbar)
+        scroller = QScrollArea()
+        scroller.setWidget(self._toolbar)
+        scroller.setWidgetResizable(True)
+        scroller.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroller.setFrameShape(QScrollArea.Shape.NoFrame)
+        scroller.setFixedWidth(self._toolbar.width() + 2)
+        self._properties = PropertiesPanel()
+        self._properties.bind(self._scene, self._toolbar)
+        hlayout.addWidget(scroller)
         hlayout.addWidget(self._view, 1)
+        hlayout.addWidget(self._properties)
 
     def _connect_signals(self):
         self._toolbar.tool_changed.connect(self._on_tool_changed)
         self._toolbar.style_changed.connect(self._on_style_changed)
         self._toolbar.pen_color_changed.connect(self._scene.set_pen_color)
+        self._scene.colour_picked.connect(self._toolbar.set_pen_colour)
+        self._scene.colour_picked.connect(lambda _colour: self._properties.refresh())
         self._toolbar.line_width_changed.connect(self._scene.set_line_width)
         self._toolbar.font_size_changed.connect(self._scene.set_font_size)
         self._toolbar.undo_requested.connect(self._scene.undo)

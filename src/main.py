@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 
 from PyQt6.QtCore import QObject, QThread, QTimer, Qt, QUrl, pyqtSignal
-from PyQt6.QtGui import QColor, QDesktopServices, QFont, QGuiApplication, QIcon, QPainter, QPixmap
+from PyQt6.QtGui import QColor, QDesktopServices, QFont, QGuiApplication, QIcon, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
 
 import demo_screenshots
@@ -144,7 +144,7 @@ def _make_tray_icon() -> QIcon:
     pix.fill(Qt.GlobalColor.transparent)
     painter = QPainter(pix)
     painter.setBrush(QColor("#0078d4"))
-    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setPen(QPen(Qt.PenStyle.NoPen))
     painter.drawRoundedRect(2, 2, 28, 28, 6, 6)
     painter.setPen(QColor("#ffffff"))
     font = QFont("Arial", 14, QFont.Weight.Bold)

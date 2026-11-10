@@ -51,7 +51,12 @@ jobs:
             "02-editor.png",
             "03-colour-dropdown.png",
             "04-record-picker.png",
-            "05-rec-control.png"
+            "05-rec-control.png",
+            "06-arrow-presets.png",
+            "07-properties.png",
+            "08-stamp-picker.png",
+            "09-text-background.png",
+            "10-image-placeholder.png"
           )) {
             $file = Join-Path screenshots $name
             if (-not (Test-Path $file)) { throw "Missing $name" }

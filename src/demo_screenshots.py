@@ -9,8 +9,8 @@ import sys
 from pathlib import Path
 
 from PIL import Image, ImageDraw
-from PyQt6.QtCore import QPointF, QRect, Qt
-from PyQt6.QtGui import QColor, QGuiApplication
+from PyQt6.QtCore import QPointF, QRect, QRectF, Qt
+from PyQt6.QtGui import QBrush, QColor, QGuiApplication, QPen
 from PyQt6.QtWidgets import QApplication
 
 log = logging.getLogger("prosnip.demo")
@@ -37,6 +37,11 @@ def capture_demo_screenshots(folder: Path) -> int:
         editor = _editor_window()
         saved.append(_grab(editor, folder / "02-editor.png"))
         saved.append(_colour_menu(editor, folder / "03-colour-dropdown.png"))
+        saved.append(_arrow_presets(folder / "06-arrow-presets.png"))
+        saved.append(_properties_panel(editor, folder / "07-properties.png"))
+        saved.append(_stamp_picker(folder / "08-stamp-picker.png"))
+        saved.append(_text_background(folder / "09-text-background.png"))
+        saved.append(_image_placeholder(editor, folder / "10-image-placeholder.png"))
         editor.close()
         saved.append(_record_dialog(folder / "04-record-picker.png"))
         saved.append(_rec_control(folder / "05-rec-control.png"))
@@ -124,6 +129,80 @@ def _colour_menu(editor, path: Path) -> Path:
     view.setFixedSize(240, row * combo.count() + 8)
     view.show()
     return _grab(view, path)
+
+
+def _arrow_presets(path: Path) -> Path:
+    from items import ARROW_STYLES, ArrowItem
+    from PyQt6.QtWidgets import QGraphicsScene, QGraphicsView
+
+    scene = QGraphicsScene()
+    scene.setSceneRect(0, 0, 420, 460)
+    scene.setBackgroundBrush(QBrush(QColor("#1e1e1e")))
+    y = 36
+    for style in ARROW_STYLES:
+        item = ArrowItem(QPointF(24, y), QPointF(300, y), QColor("#e63946"), 8, style)
+        scene.addItem(item)
+        y += 72
+    view = QGraphicsView(scene)
+    view.setFrameShape(QGraphicsView.Shape.NoFrame)
+    view.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+    view.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+    view.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+    view.resize(420, 460)
+    return _grab(view, path)
+
+
+def _properties_panel(editor, path: Path) -> Path:
+    strokes = [item for item in editor._scene.items() if item.__class__.__name__ == "StrokeItem"]
+    if strokes:
+        strokes[0].setSelected(True)
+    editor._properties.refresh()
+    return _grab(editor, path)
+
+
+def _stamp_picker(path: Path) -> Path:
+    from stamp_picker import StampPickerDialog
+
+    dialog = StampPickerDialog()
+    try:
+        return _grab(dialog, path)
+    finally:
+        dialog.close()
+
+
+def _text_background(path: Path) -> Path:
+    from editor import EditorWindow
+    from items import TextItem
+
+    window = EditorWindow(_sample_image())
+    window.resize(900, 520)
+    text = TextItem("Label", QPointF(80, 120), QColor("#ffffff"), 28)
+    text.bg_color = QColor(29, 53, 87, 220)
+    text.outline_enabled = True
+    text.outline_color = QColor("#f4a261")
+    text.outline_width = 3
+    window._scene.addItem(text)
+    text.setSelected(True)
+    try:
+        return _grab(window, path)
+    finally:
+        window.close()
+
+
+def _image_placeholder(editor, path: Path) -> Path:
+    from PyQt6.QtWidgets import QGraphicsRectItem
+    from PyQt6.QtGui import QPen, QBrush
+
+    for item in editor._scene.selectedItems():
+        item.setSelected(False)
+    frame = QGraphicsRectItem(QRectF(500, 300, 240, 140))
+    frame.setPen(QPen(QColor("#e63946"), 3, Qt.PenStyle.DashLine))
+    frame.setBrush(QBrush(QColor(230, 57, 70, 50)))
+    editor._scene.addItem(frame)
+    try:
+        return _grab(editor, path)
+    finally:
+        editor._scene.removeItem(frame)
 
 
 def _record_dialog(path: Path) -> Path:
