@@ -226,12 +226,15 @@ def _toolbar_tooltip(editor, path: Path) -> Path:
         app.processEvents()
     tip = None
     for widget in QApplication.topLevelWidgets():
-        if widget.isVisible() and widget.windowFlags() & Qt.WindowType.ToolTip:
+        if widget.isVisible() and widget.windowType() == Qt.WindowType.ToolTip:
             tip = widget
             break
     if tip is None:
         raise RuntimeError("The Arrow tooltip did not appear")
-    return _grab(tip, path)
+    grabbed = _grab(tip, path)
+    if tip.height() > 160:
+        raise RuntimeError(f"Tooltip grab is the wrong window ({tip.width()}x{tip.height()})")
+    return grabbed
 
 
 def _record_dialog(path: Path) -> Path:
