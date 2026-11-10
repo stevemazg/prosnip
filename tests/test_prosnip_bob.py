@@ -653,8 +653,6 @@ class AppTests(unittest.TestCase):
 
 class ColourAndPenTests(unittest.TestCase):
     def test_toolbar_buttons_use_tooltips_not_captions(self):
-        from styles import TOOLTIP_STYLE, install_tooltip_style
-
         bar = toolbar.ToolBar()
         arrow = bar._tool_buttons["arrow"]
         pen = bar._tool_buttons["pen"]
@@ -663,9 +661,9 @@ class ColourAndPenTests(unittest.TestCase):
         self.assertEqual(arrow.toolTip(), "Arrow (A)")
         self.assertEqual(pen.toolTip(), "Pen (P)")
         self.assertEqual(bar._tool_buttons["highlight"].toolTip(), "Highlighter (H)")
-        install_tooltip_style()
-        self.assertIn("font-size: 12pt", TOOLTIP_STYLE)
-        self.assertIn("color: #ffffff", QApplication.instance().styleSheet())
+        self.assertIn("QToolTip", bar.styleSheet())
+        self.assertIn("font-size: 12pt", bar.styleSheet())
+        self.assertIn("color: #ffffff", bar.styleSheet())
 
     def test_style_menu_shows_swatches_and_light_text(self):
         from PyQt6.QtGui import QPalette

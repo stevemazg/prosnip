@@ -27,13 +27,19 @@ def demo_output_dir(argv: list[str]) -> Path | None:
 
 
 def capture_demo_screenshots(folder: Path) -> int:
+    import faulthandler
+
     folder = Path(folder)
     folder.mkdir(parents=True, exist_ok=True)
+    fault_file = open(folder / "fault.log", "w", encoding="utf-8")
+    faulthandler.enable(fault_file, all_threads=True)
     app = QApplication.instance() or QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
     saved: list[Path] = []
     try:
+        log.info("demo: main window")
         saved.append(_main_window(folder))
+        log.info("demo: editor")
         editor = _editor_window()
         saved.append(_grab(editor, folder / "02-editor.png"))
         saved.append(_colour_menu(editor, folder / "03-colour-dropdown.png"))

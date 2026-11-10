@@ -14,7 +14,7 @@ from PyQt6.QtWidgets import (
 
 from editor import APP_NAME, APP_VERSION
 from hotkey import TAKEN_MESSAGE
-from styles import DEFAULT_STYLE
+from styles import DEFAULT_STYLE, with_tooltip_style
 
 
 def shortcut_status_text(reason: str | None) -> str:
@@ -55,7 +55,7 @@ class MainWindow(QMainWindow):
 
     def _build(self):
         accent = DEFAULT_STYLE.pen_color.name()
-        self.setStyleSheet(
+        self.setStyleSheet(with_tooltip_style(
             f"""
             QMainWindow, QWidget {{
                 background-color: #2b2b2b;
@@ -91,7 +91,7 @@ class MainWindow(QMainWindow):
                 background: #c62f3b;
             }}
             """
-        )
+        ))
 
         central = QWidget()
         self.setCentralWidget(central)

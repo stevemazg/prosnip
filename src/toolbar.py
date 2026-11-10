@@ -7,7 +7,7 @@ from PyQt6.QtCore import pyqtSignal, Qt, QSize
 
 from styles import (
     STYLES, QuickStyle, DEFAULT_STYLE,
-    apply_combo_contrast, colour_swatch_icon,
+    apply_combo_contrast, colour_swatch_icon, with_tooltip_style,
 )
 from stamp_picker import StampPickerDialog
 
@@ -162,7 +162,7 @@ class ToolBar(QWidget):
         self._pen_color = DEFAULT_STYLE.pen_color
         self._build_ui()
         self.setFixedWidth(156)
-        self.setStyleSheet("""
+        self.setStyleSheet(with_tooltip_style("""
             QWidget { background-color: #1e1e1e; }
             QPushButton {
                 background-color: #2d2d2d;
@@ -200,7 +200,7 @@ class ToolBar(QWidget):
                 font-size: 13px;
                 min-height: 22px;
             }
-        """)
+        """))
         apply_combo_contrast(self._style_combo)
 
     def _build_ui(self):

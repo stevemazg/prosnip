@@ -39,13 +39,18 @@ jobs:
       - name: Capture windows from the built executable
         run: |
           New-Item -ItemType Directory -Force -Path screenshots | Out-Null
-          & .\dist\ProSnip-Bob\ProSnip-Bob.exe --demo-screenshots "$PWD\screenshots"
-          $code = $LASTEXITCODE
+          $proc = Start-Process -FilePath ".\dist\ProSnip-Bob\ProSnip-Bob.exe" -ArgumentList "--demo-screenshots","$PWD\screenshots" -Wait -PassThru
+          Write-Host "demo exit: $($proc.ExitCode)"
           Get-ChildItem -Path screenshots | Format-Table Name, Length
           if (Test-Path .\dist\ProSnip-Bob\ProSnip-Bob.log) {
-            Get-Content .\dist\ProSnip-Bob\ProSnip-Bob.log -Tail 80
+            Write-Host "----- ProSnip-Bob.log -----"
+            Get-Content .\dist\ProSnip-Bob\ProSnip-Bob.log -Tail 120
           }
-          if ($code -ne 0) { exit $code }
+          if (Test-Path .\screenshots\fault.log) {
+            Write-Host "----- fault.log -----"
+            Get-Content .\screenshots\fault.log
+          }
+          if ($null -eq $proc.ExitCode -or $proc.ExitCode -ne 0) { exit 1 }
           foreach ($name in @(
             "01-main-window.png",
             "02-editor.png",

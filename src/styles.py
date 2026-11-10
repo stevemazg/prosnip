@@ -100,22 +100,16 @@ QToolTip {
     border: 1px solid #ffffff;
     padding: 8px 12px;
     font-size: 12pt;
-    font-weight: 600;
+    font-weight: bold;
 }
 """
 
 
-def install_tooltip_style() -> None:
-    """Large, high-contrast tooltips. Points scale with the screen DPI."""
-    from PyQt6.QtWidgets import QApplication
-
-    app = QApplication.instance()
-    if app is None:
-        return
-    current = app.styleSheet() or ""
-    if "QToolTip" in current:
-        return
-    app.setStyleSheet(current + TOOLTIP_STYLE)
+def with_tooltip_style(style: str) -> str:
+    """Append the shared tooltip rule. Points follow the screen DPI."""
+    if "QToolTip" in (style or ""):
+        return style
+    return (style or "") + TOOLTIP_STYLE
 
 
 def apply_combo_contrast(combo) -> None:

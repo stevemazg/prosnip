@@ -13,7 +13,7 @@ from PyQt6.QtGui import (
 from canvas import ProSnipScene, ProSnipView
 from properties import PropertiesPanel
 from toolbar import ToolBar
-from styles import QuickStyle, install_tooltip_style
+from styles import QuickStyle, with_tooltip_style
 
 import io
 import math
@@ -130,9 +130,8 @@ class EditorWindow(QMainWindow):
         self._bg_item = None
 
         self.setWindowTitle(f"{APP_NAME} — Untitled")
-        install_tooltip_style()
         self.setMinimumSize(900, 600)
-        self.setStyleSheet("background-color: #2b2b2b;")
+        self.setStyleSheet(with_tooltip_style("background-color: #2b2b2b;"))
 
         self._scene = ProSnipScene()
         self._view = ProSnipView(self._scene)
@@ -155,7 +154,7 @@ class EditorWindow(QMainWindow):
         # Top action toolbar
         top_bar = QToolBar("Actions")
         top_bar.setMovable(False)
-        top_bar.setStyleSheet("""
+        top_bar.setStyleSheet(with_tooltip_style("""
             QToolBar { background: #1e1e1e; border: none; spacing: 4px; padding: 4px; }
             QPushButton {
                 background: #2d2d2d; border: 1px solid #3d3d3d;
@@ -163,7 +162,7 @@ class EditorWindow(QMainWindow):
                 padding: 4px 10px; font-size: 12px;
             }
             QPushButton:hover { background: #3d3d3d; }
-        """)
+        """))
         self.addToolBar(Qt.ToolBarArea.TopToolBarArea, top_bar)
 
         def _tb_btn(label, tooltip=""):
