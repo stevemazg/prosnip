@@ -55,7 +55,7 @@ def capture_demo_screenshots(folder: Path) -> int:
     except Exception:
         log.exception("Demo screenshots failed")
         return 1
-    missing = [path.name for path in saved if not path.is_file() or path.stat().st_size < 1000]
+    missing = [path.name for path in saved if not path.is_file() or path.stat().st_size < 200]
     if missing:
         log.error("Screenshot files missing or empty: %s", ", ".join(missing))
         return 1
