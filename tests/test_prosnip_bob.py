@@ -349,7 +349,7 @@ class LauncherTests(unittest.TestCase):
         labels = [label.text() for label in window.findChildren(main_window.QLabel)]
         self.assertIn("ProSnip-Bob", labels)
         self.assertIn(f"Version {editor.APP_VERSION}", labels)
-        self.assertEqual(editor.APP_VERSION, "1.5.0.0")
+        self.assertEqual(editor.APP_VERSION, "1.5.1.0")
         self.assertEqual(window.new_capture_button.text(), "New Capture")
         self.assertEqual(window.quit_button.text(), "Quit")
         self.assertIn("this system", window.shortcut_label.text())
@@ -631,8 +631,8 @@ class AppTests(unittest.TestCase):
             "Steve Maz",
             "ProSnip-Bob",
             "ProSnip-Bob screen capture and annotation tool",
-            "1.5.0.0",
-            "(1, 5, 0, 0)",
+            "1.5.1.0",
+            "(1, 5, 1, 0)",
             "ProSnip-Bob.exe",
             "Copyright (C) 2026 Steve Maz",
         ):
@@ -879,6 +879,15 @@ class EditorLayoutTests(unittest.TestCase):
         self.assertLessEqual(placed[0] + placed[2], 0)
         self.assertEqual(fit_editor_frame(1500, 900, 0, 0, monitor, 1.5)[2], 1000)
         self.assertEqual(fit_editor_frame(1000, 500, 0, 0, monitor, 1.25)[2], 800)
+        wide = fit_editor_frame(200, 120, 400, 56, monitor, 1.5, minimum_w=1080, minimum_h=680)
+        self.assertGreaterEqual(wide[2], 1080)
+        self.assertGreaterEqual(wide[3], 680)
+        self.assertLessEqual(wide[2], 1280)
+        from layout import tool_column_layout
+        self.assertEqual(tool_column_layout(16, 1000), (1, 52))
+        self.assertEqual(tool_column_layout(16, 640)[0], 2)
+        columns, button = tool_column_layout(16, 640)
+        self.assertGreaterEqual(button, 44)
 
     def test_pen_width_is_inside_the_bounding_rect(self):
         rect = items.RectItem(QRectF(10, 10, 80, 40), QColor("#e63946"), QColor(0, 0, 0, 0), 16)

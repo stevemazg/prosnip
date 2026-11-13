@@ -2,8 +2,8 @@ from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
     QToolBar, QPushButton, QFileDialog, QDialog,
     QFormLayout, QSpinBox, QCheckBox, QDialogButtonBox,
-    QGraphicsPixmapItem, QApplication, QLabel, QScrollArea,
-    QDockWidget,
+    QGraphicsPixmapItem, QApplication, QLabel, QSizePolicy,
+    QScrollArea, QDockWidget,
 )
 from PyQt6.QtCore import Qt, QRectF, QEvent, QRect, pyqtSignal
 from PyQt6.QtGui import (
@@ -26,7 +26,7 @@ from pathlib import Path
 from PIL import Image, ImageOps
 
 APP_NAME = "ProSnip-Bob"
-APP_VERSION = "1.5.0.0"
+APP_VERSION = "1.5.1.0"
 
 
 def clamp_crop_rect(rect: QRectF, width: int, height: int) -> QRect | None:
@@ -138,9 +138,11 @@ class EditorWindow(QMainWindow):
         self._bg_item = None
 
         self.setWindowTitle(f"{APP_NAME} — Untitled")
-        self.setMinimumSize(900, 600)
+        # Wide enough for the top actions, tall enough for two tool columns.
+        self.setMinimumSize(1080, 680)
         self.setStyleSheet(with_tooltip_style("background-color: #2b2b2b;"))
 
+        self._placing_tools = False
         self._scene = ProSnipScene()
         self._view = ProSnipView(self._scene)
         self._toolbar = ToolBar()
@@ -169,12 +171,15 @@ class EditorWindow(QMainWindow):
         frame = fit_editor_frame(
             self._pil_image.width,
             self._pil_image.height,
-            280,
-            150,
+            400,
+            56,
             screen.availableGeometry(),
             screen.devicePixelRatio() or 1.0,
+            minimum_w=self.minimumWidth(),
+            minimum_h=self.minimumHeight(),
         )
         self.setGeometry(*frame)
+        self._place_tools()
 
     def _setup_ui(self):
         top_bar = QToolBar("Actions")
@@ -211,32 +216,63 @@ class EditorWindow(QMainWindow):
             self._btn_rotate, self._btn_flip, self._btn_border,
             self._btn_forward, self._btn_back, self._btn_lock,
         ):
+            btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
             top_bar.addWidget(btn)
-
-        tool_scroll = QScrollArea()
-        tool_scroll.setWidget(self._toolbar)
-        tool_scroll.setWidgetResizable(True)
-        tool_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
-        tool_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        tool_scroll.setMinimumHeight(72)
-        tool_scroll.setMaximumHeight(240)
-        self._toolbar.setMinimumHeight(self._toolbar.sizeHint().height())
+        self._top_bar = top_bar
 
         central = QWidget()
         self.setCentralWidget(central)
-        layout = QVBoxLayout(central)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
-        layout.addWidget(tool_scroll)
-        layout.addWidget(self._view, 1)
+        row = QHBoxLayout(central)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(0)
+        row.addWidget(self._toolbar, 0)
+        row.addWidget(self._view, 1)
 
         self._properties = PropertiesPanel()
         self._properties.bind(self._scene, self._toolbar)
+        right = QWidget()
+        right_layout = QVBoxLayout(right)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(0)
+        right_layout.addWidget(self._toolbar.controls_panel)
+        right_layout.addWidget(self._properties, 1)
+        right_scroll = QScrollArea()
+        right_scroll.setWidget(right)
+        right_scroll.setWidgetResizable(True)
+        right_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        right_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._swatch_panel = SwatchPanel(self._swatches, self._apply_swatch)
-        self._properties_dock = self._dock("Properties", self._properties)
+        self._swatch_panel.setMinimumHeight(200)
+        self._properties_dock = self._dock("Properties", right_scroll)
         self._swatch_dock = self._dock("Swatches", self._swatch_panel)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self._properties_dock)
         self.splitDockWidget(self._properties_dock, self._swatch_dock, Qt.Orientation.Vertical)
+        self._place_tools()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if getattr(self, "_properties_dock", None) is None:
+            return
+        height = max(1, self.height())
+        self.resizeDocks(
+            [self._properties_dock, self._swatch_dock],
+            [int(height * 0.62), int(height * 0.28)],
+            Qt.Orientation.Vertical,
+        )
+
+    def _place_tools(self):
+        top = self._top_bar.height() if getattr(self, "_top_bar", None) is not None else 48
+        self._toolbar.arrange(max(240, self.height() - top - 8))
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if getattr(self, "_placing_tools", False) or getattr(self, "_toolbar", None) is None:
+            return
+        self._placing_tools = True
+        try:
+            self._place_tools()
+        finally:
+            self._placing_tools = False
 
     def _dock(self, title: str, widget: QWidget) -> QDockWidget:
         dock = QDockWidget(title, self)

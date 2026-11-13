@@ -1,11 +1,12 @@
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QPushButton, QComboBox,
+    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QPushButton, QComboBox,
     QSpinBox, QLabel, QFrame, QColorDialog, QSizePolicy, QApplication,
 )
 from PyQt6.QtGui import QPixmap, QPainter, QColor, QIcon, QPen, QBrush, QFont
 from PyQt6.QtCore import pyqtSignal, Qt, QSize
 
 from colour import FORMATS, ColourHistory, parse_hex
+from layout import tool_column_layout
 from styles import (
     STYLES, QuickStyle, DEFAULT_STYLE,
     apply_combo_contrast, colour_swatch_icon, with_tooltip_style,
@@ -211,8 +212,7 @@ class ToolBar(QWidget):
         self._history = history if history is not None else ColourHistory()
         self._swatch_buttons = []
         self._build_ui()
-        self.setMinimumWidth(96)
-        self._controls = []
+        self.arrange(1200)
         self.setStyleSheet(with_tooltip_style("""
             QWidget { background-color: #1e1e1e; }
             QPushButton {
@@ -257,29 +257,34 @@ class ToolBar(QWidget):
 
     def _build_ui(self):
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(6)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(4)
+        self._grid = QGridLayout()
+        self._grid.setContentsMargins(0, 0, 0, 0)
+        self._grid.setSpacing(4)
+        layout.addLayout(self._grid)
+        layout.addStretch(0)
 
-        # Tool buttons. Icons are 40px and the checked state is the active tool.
         for tool_id, label, icon_fn in TOOL_DEFS:
             btn = QPushButton()
             btn.setCheckable(tool_id != "screenpick")
             btn.setIcon(_make_icon(icon_fn, 40))
             btn.setIconSize(QSize(40, 40))
-            btn.setFixedSize(88, 56)
+            btn.setFixedSize(52, 52)
             btn.setToolTip(label)
             btn.clicked.connect(lambda checked, t=tool_id: self._on_tool_clicked(t))
             self._tool_buttons[tool_id] = btn
-            layout.addWidget(btn, alignment=Qt.AlignmentFlag.AlignHCenter)
-
         self._tool_buttons["select"].setChecked(True)
 
-        layout.addWidget(_divider())
+        self.controls_panel = QWidget()
+        controls = QVBoxLayout(self.controls_panel)
+        controls.setContentsMargins(8, 8, 8, 4)
+        controls.setSpacing(4)
 
         # Quick styles
         lbl_style = QLabel("Style")
         lbl_style.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(lbl_style)
+        controls.addWidget(lbl_style)
         self._style_combo = QComboBox()
         self._style_combo.setFixedHeight(26)
         for name, style in STYLES.items():
@@ -287,11 +292,11 @@ class ToolBar(QWidget):
         apply_combo_contrast(self._style_combo)
         self._style_combo.setToolTip(self._style_combo.currentText())
         self._style_combo.currentTextChanged.connect(self._on_style_changed)
-        layout.addWidget(self._style_combo)
+        controls.addWidget(self._style_combo)
 
         lbl_format = QLabel("Code")
         lbl_format.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(lbl_format)
+        controls.addWidget(lbl_format)
         self._format_combo = QComboBox()
         self._format_combo.setFixedHeight(28)
         for key in FORMATS:
@@ -302,13 +307,13 @@ class ToolBar(QWidget):
         apply_combo_contrast(self._format_combo)
         self._format_combo.setToolTip("Colour code format")
         self._format_combo.currentIndexChanged.connect(self._on_format_changed)
-        layout.addWidget(self._format_combo)
+        controls.addWidget(self._format_combo)
 
         self._swatch_row = QWidget()
         self._swatch_layout = QVBoxLayout(self._swatch_row)
         self._swatch_layout.setContentsMargins(0, 0, 0, 0)
         self._swatch_layout.setSpacing(4)
-        layout.addWidget(self._swatch_row)
+        controls.addWidget(self._swatch_row)
         self.refresh_swatches()
 
         # Color picker
@@ -317,48 +322,60 @@ class ToolBar(QWidget):
         self._color_btn.setToolTip("Pen colour")
         self._update_color_btn()
         self._color_btn.clicked.connect(self._on_pick_color)
-        layout.addWidget(self._color_btn)
+        controls.addWidget(self._color_btn)
 
         # Line width
         lbl_lw = QLabel("Width")
         lbl_lw.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(lbl_lw)
+        controls.addWidget(lbl_lw)
         self._lw_spin = QSpinBox()
         self._lw_spin.setRange(1, 16)
         self._lw_spin.setToolTip("Line and pen thickness (2, 4, 8, 12)")
         self._lw_spin.setValue(DEFAULT_STYLE.line_width)
         self._lw_spin.setFixedHeight(32)
         self._lw_spin.valueChanged.connect(self.line_width_changed.emit)
-        layout.addWidget(self._lw_spin)
+        controls.addWidget(self._lw_spin)
 
         # Font size
         lbl_fs = QLabel("Font")
         lbl_fs.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(lbl_fs)
+        controls.addWidget(lbl_fs)
         self._fs_spin = QSpinBox()
         self._fs_spin.setRange(8, 48)
         self._fs_spin.setValue(DEFAULT_STYLE.font_size)
         self._fs_spin.setFixedHeight(32)
         self._fs_spin.valueChanged.connect(self.font_size_changed.emit)
-        layout.addWidget(self._fs_spin)
+        controls.addWidget(self._fs_spin)
 
-        layout.addWidget(_divider())
-
-        # Undo
-        btn_undo = QPushButton("↩")
-        btn_undo.setFixedHeight(32)
+        actions = QHBoxLayout()
+        btn_undo = QPushButton("Undo")
         btn_undo.setToolTip("Undo (Ctrl+Z)")
         btn_undo.clicked.connect(self.undo_requested.emit)
-        layout.addWidget(btn_undo)
-
-        # Delete
-        btn_del = QPushButton("🗑")
-        btn_del.setFixedHeight(32)
+        btn_del = QPushButton("Delete")
         btn_del.setToolTip("Delete selected (Del)")
         btn_del.clicked.connect(self.delete_requested.emit)
-        layout.addWidget(btn_del)
+        actions.addWidget(btn_undo)
+        actions.addWidget(btn_del)
+        controls.addLayout(actions)
 
-        layout.addStretch()
+    def arrange(self, available_height: int) -> None:
+        """Lay every tool out in one or two columns. Nothing scrolls."""
+        count = len(TOOL_DEFS)
+        columns, button = tool_column_layout(count, available_height)
+        icon = max(32, button - 12)
+        rows = (count + columns - 1) // columns
+        while self._grid.count():
+            self._grid.takeAt(0)
+        for index, (tool_id, _label, _icon) in enumerate(TOOL_DEFS):
+            btn = self._tool_buttons[tool_id]
+            btn.setFixedSize(button, button)
+            btn.setIconSize(QSize(icon, icon))
+            row = index % rows
+            column = index // rows
+            self._grid.addWidget(btn, row, column)
+        width = 12 + columns * button + max(0, columns - 1) * 4
+        height = 12 + rows * button + max(0, rows - 1) * 4
+        self.setFixedSize(width, height)
 
     def _on_format_changed(self, _index: int):
         fmt = self._format_combo.currentData()
