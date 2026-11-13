@@ -41,6 +41,20 @@ def capture_demo_screenshots(folder: Path) -> int:
         saved.append(_main_window(folder))
         log.info("demo: editor")
         editor = _editor_window()
+        editor.show()
+        app = QApplication.instance()
+        if app is not None:
+            app.processEvents()
+        editor._place_tools()
+        editor.assert_tools_left_of_canvas()
+        log.info(
+            "Tool panel x=%s canvas x=%s panel=%sx%s tools=%s",
+            editor._toolbar.mapTo(editor, editor._toolbar.rect().topLeft()).x(),
+            editor._view.mapTo(editor, editor._view.rect().topLeft()).x(),
+            editor._toolbar.width(),
+            editor._toolbar.height(),
+            len(editor._toolbar._tool_buttons),
+        )
         saved.append(_grab(editor, folder / "02-editor.png"))
         saved.append(_colour_menu(editor, folder / "03-colour-dropdown.png"))
         saved.append(_arrow_presets(folder / "06-arrow-presets.png"))
@@ -290,7 +304,12 @@ def _small_editor(path: Path) -> Path:
 
     window = EditorWindow(Image.new("RGB", (240, 140), "#d7e6f5"))
     window.resize(1180, 760)
+    window.show()
+    app = QApplication.instance()
+    if app is not None:
+        app.processEvents()
     window._place_tools()
+    window.assert_tools_left_of_canvas()
     try:
         return _grab(window, path)
     finally:

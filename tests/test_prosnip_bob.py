@@ -349,7 +349,7 @@ class LauncherTests(unittest.TestCase):
         labels = [label.text() for label in window.findChildren(main_window.QLabel)]
         self.assertIn("ProSnip-Bob", labels)
         self.assertIn(f"Version {editor.APP_VERSION}", labels)
-        self.assertEqual(editor.APP_VERSION, "1.5.1.0")
+        self.assertEqual(editor.APP_VERSION, "1.5.2.0")
         self.assertEqual(window.new_capture_button.text(), "New Capture")
         self.assertEqual(window.quit_button.text(), "Quit")
         self.assertIn("this system", window.shortcut_label.text())
@@ -631,8 +631,8 @@ class AppTests(unittest.TestCase):
             "Steve Maz",
             "ProSnip-Bob",
             "ProSnip-Bob screen capture and annotation tool",
-            "1.5.1.0",
-            "(1, 5, 1, 0)",
+            "1.5.2.0",
+            "(1, 5, 2, 0)",
             "ProSnip-Bob.exe",
             "Copyright (C) 2026 Steve Maz",
         ):
@@ -888,6 +888,21 @@ class EditorLayoutTests(unittest.TestCase):
         self.assertEqual(tool_column_layout(16, 640)[0], 2)
         columns, button = tool_column_layout(16, 640)
         self.assertGreaterEqual(button, 44)
+
+    def test_editor_tools_sit_left_of_the_canvas(self):
+        from PIL import Image as PILImage
+
+        window = editor.EditorWindow(PILImage.new("RGB", (800, 500), "#d7e6f5"))
+        self.addCleanup(window.close)
+        window.resize(1200, 800)
+        window.show()
+        QApplication.processEvents()
+        window._place_tools()
+        window.assert_tools_left_of_canvas()
+        panel = window._toolbar.mapTo(window, window._toolbar.rect().topLeft())
+        canvas = window._view.mapTo(window, window._view.rect().topLeft())
+        self.assertLess(panel.x(), canvas.x())
+        self.assertEqual(len(window._toolbar._tool_buttons), 16)
 
     def test_pen_width_is_inside_the_bounding_rect(self):
         rect = items.RectItem(QRectF(10, 10, 80, 40), QColor("#e63946"), QColor(0, 0, 0, 0), 16)

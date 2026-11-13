@@ -26,7 +26,7 @@ from pathlib import Path
 from PIL import Image, ImageOps
 
 APP_NAME = "ProSnip-Bob"
-APP_VERSION = "1.5.1.0"
+APP_VERSION = "1.5.2.0"
 
 
 def clamp_crop_rect(rect: QRectF, width: int, height: int) -> QRect | None:
@@ -222,6 +222,8 @@ class EditorWindow(QMainWindow):
 
         central = QWidget()
         self.setCentralWidget(central)
+        self._toolbar.setObjectName("ToolPanel")
+        self._view.setObjectName("EditorCanvas")
         row = QHBoxLayout(central)
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(0)
@@ -281,6 +283,37 @@ class EditorWindow(QMainWindow):
         dock.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetClosable)
         dock.setFloating(False)
         return dock
+
+    def assert_tools_left_of_canvas(self) -> None:
+        """Fail if the tools are not a left-hand column beside the canvas."""
+        from PyQt6.QtWidgets import QScrollArea
+
+        panel = self._toolbar
+        view = self._view
+        origin = panel.mapTo(self, panel.rect().topLeft())
+        view_origin = view.mapTo(self, view.rect().topLeft())
+        panel_rect = QRect(origin, panel.size())
+        view_rect = QRect(view_origin, view.size())
+        problems = []
+        if panel.width() < 40 or panel.height() < 200:
+            problems.append(f"tool panel is too small ({panel.width()}x{panel.height()})")
+        if origin.x() >= view_origin.x():
+            problems.append(f"tool panel x {origin.x()} is not left of the canvas x {view_origin.x()}")
+        if panel_rect.intersects(view_rect):
+            problems.append(f"tool panel {panel_rect.getRect()} overlaps the canvas {view_rect.getRect()}")
+        if len(panel._tool_buttons) != 16:
+            problems.append(f"expected 16 tools, found {len(panel._tool_buttons)}")
+        for tool_id, button in panel._tool_buttons.items():
+            if not button.isVisible():
+                problems.append(f"{tool_id} is not visible")
+            ancestor = button.parentWidget()
+            while ancestor is not None:
+                if isinstance(ancestor, QScrollArea):
+                    problems.append(f"{tool_id} is inside a scroll area")
+                    break
+                ancestor = ancestor.parentWidget()
+        if problems:
+            raise RuntimeError("Editor tool layout failed: " + "; ".join(problems))
 
     def _apply_swatch(self, hex_code: str):
         colour = QColor(hex_code)

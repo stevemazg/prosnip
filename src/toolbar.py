@@ -375,7 +375,10 @@ class ToolBar(QWidget):
             self._grid.addWidget(btn, row, column)
         width = 12 + columns * button + max(0, columns - 1) * 4
         height = 12 + rows * button + max(0, rows - 1) * 4
-        self.setFixedSize(width, height)
+        self.setFixedWidth(width)
+        self.setMinimumHeight(height)
+        self.setMaximumHeight(16777215)
+        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
 
     def _on_format_changed(self, _index: int):
         fmt = self._format_combo.currentData()
