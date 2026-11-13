@@ -22,7 +22,7 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from PyQt6.QtCore import QEvent, QPoint, QPointF, QRect, QRectF, Qt
+from PyQt6.QtCore import QEvent, QPoint, QPointF, QRect, QRectF, QSize, Qt
 from PyQt6.QtGui import QBrush, QColor, QImage, QKeyEvent, QMouseEvent, QPainter, QPen, QPixmap
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication, QSystemTrayIcon, QWidget
@@ -351,7 +351,7 @@ class LauncherTests(unittest.TestCase):
         labels = [label.text() for label in window.findChildren(main_window.QLabel)]
         self.assertIn("ProSnip-Bob", labels)
         self.assertIn(f"Version {editor.APP_VERSION}", labels)
-        self.assertEqual(editor.APP_VERSION, "1.3.1.0")
+        self.assertEqual(editor.APP_VERSION, "1.4.0.0")
         self.assertEqual(window.new_capture_button.text(), "New Capture")
         self.assertEqual(window.quit_button.text(), "Quit")
         self.assertIn("this system", window.shortcut_label.text())
@@ -438,6 +438,9 @@ class HotkeyTests(unittest.TestCase):
             hotkey.MOD_CONTROL | hotkey.MOD_SHIFT | hotkey.MOD_NOREPEAT,
         )
         self.assertEqual(hotkey.VK_S, 0x53)
+        self.assertEqual(hotkey.VK_P, 0x50)
+        self.assertEqual(hotkey.PICK_HOTKEY_ID, 2)
+        self.assertNotEqual(hotkey.PICK_HOTKEY_ID, hotkey.HOTKEY_ID)
         self.assertEqual(hotkey.WM_HOTKEY, 0x0312)
 
     def test_parser_recognises_only_our_hotkey_message(self):
@@ -622,8 +625,8 @@ class AppTests(unittest.TestCase):
             "Steve Maz",
             "ProSnip-Bob",
             "ProSnip-Bob screen capture and annotation tool",
-            "1.3.1.0",
-            "(1, 3, 1, 0)",
+            "1.4.0.0",
+            "(1, 4, 0, 0)",
             "ProSnip-Bob.exe",
             "Copyright (C) 2026 Steve Maz",
         ):
@@ -860,6 +863,88 @@ class RecordingTests(unittest.TestCase):
         while not frames.empty():
             kept.append(frames.get_nowait()[0])
         self.assertEqual(kept, [4, 5])
+
+
+class ColourFormatTests(unittest.TestCase):
+    def test_hex_rgb_and_hsl_edges(self):
+        from colour import format_colour, next_format, rgb_to_hsl
+
+        self.assertEqual(format_colour(26, 43, 60), "#1A2B3C")
+        self.assertEqual(format_colour(26, 43, 60, "rgb"), "rgb(26, 43, 60)")
+        self.assertEqual(format_colour(26, 43, 60, "hsl"), "hsl(210, 40%, 17%)")
+        self.assertEqual(rgb_to_hsl(26, 43, 60), (210, 40, 17))
+        self.assertEqual(format_colour(0, 0, 0, "hsl"), "hsl(0, 0%, 0%)")
+        self.assertEqual(format_colour(255, 255, 255, "hsl"), "hsl(0, 0%, 100%)")
+        self.assertEqual(format_colour(255, 0, 0, "hsl"), "hsl(0, 100%, 50%)")
+        self.assertEqual(format_colour(0, 255, 0, "hsl"), "hsl(120, 100%, 50%)")
+        self.assertEqual(format_colour(0, 0, 255, "hsl"), "hsl(240, 100%, 50%)")
+        self.assertEqual(format_colour(128, 128, 128, "hsl"), "hsl(0, 0%, 50%)")
+        self.assertEqual(format_colour(-4, 300, 26.2), "#00FF1A")
+        self.assertEqual(next_format("hex"), "rgb")
+        self.assertEqual(next_format("rgb"), "hsl")
+        self.assertEqual(next_format("hsl"), "hex")
+        self.assertEqual(next_format("nope"), "rgb")
+
+    def test_zoom_clamps_to_the_loupe_range(self):
+        from colour import ZOOM_DEFAULT, clamp_zoom
+
+        self.assertEqual(clamp_zoom(8), 8)
+        self.assertEqual(clamp_zoom(1), 2)
+        self.assertEqual(clamp_zoom(2), 2)
+        self.assertEqual(clamp_zoom(32), 32)
+        self.assertEqual(clamp_zoom(100), 32)
+        self.assertEqual(clamp_zoom(7.6), 8)
+        self.assertEqual(clamp_zoom("nope"), ZOOM_DEFAULT)
+        self.assertEqual(clamp_zoom(None), ZOOM_DEFAULT)
+
+    def test_history_persists_the_latest_twelve(self):
+        import tempfile
+
+        from colour import HISTORY_LIMIT, ColourHistory, format_colour
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "settings.json"
+            history = ColourHistory(path)
+            self.assertEqual(history.format, "hex")
+            self.assertEqual(history.zoom, 8)
+            for index in range(HISTORY_LIMIT + 1):
+                history.add_rgb(index, 0, 0)
+            self.assertEqual(len(history.colours), HISTORY_LIMIT)
+            self.assertEqual(history.colours[0], format_colour(HISTORY_LIMIT, 0, 0))
+            self.assertNotIn(format_colour(0, 0, 0), history.colours)
+            history.add_rgb(HISTORY_LIMIT, 0, 0)
+            self.assertEqual(history.colours.count(format_colour(HISTORY_LIMIT, 0, 0)), 1)
+            history.set_format("hsl")
+            history.set_zoom(40)
+            reloaded = ColourHistory(path)
+            self.assertEqual(reloaded.format, "hsl")
+            self.assertEqual(reloaded.zoom, 32)
+            self.assertEqual(reloaded.colours, history.colours)
+            self.assertEqual(reloaded.display("#1A2B3C"), "hsl(210, 40%, 17%)")
+
+    def test_loupe_centres_on_the_sampled_pixel(self):
+        from colour_picker import loupe_top_left, render_loupe, widget_to_pixel
+
+        source = QImage(30, 20, QImage.Format.Format_ARGB32)
+        source.fill(QColor("#1a2b3c"))
+        loupe = render_loupe(source, 4, 4, 8)
+        centre = loupe.pixelColor(5 * 8 + 3, 5 * 8 + 3)
+        self.assertEqual((centre.red(), centre.green(), centre.blue()), (26, 43, 60))
+        self.assertEqual(loupe.width(), 11 * 8)
+        self.assertEqual(widget_to_pixel(100, 50, 200, 100, 400, 200), (200, 100))
+        self.assertEqual(widget_to_pixel(-5, 999, 200, 100, 400, 200), (0, 199))
+        self.assertEqual(loupe_top_left(10, 10, 80, 100, 400, 300), (28, 28))
+        flipped = loupe_top_left(380, 280, 80, 100, 400, 300)
+        self.assertLess(flipped[0], 380)
+        self.assertLess(flipped[1], 280)
+
+    def test_toolbar_uses_large_icons_and_names_the_picker(self):
+        bar = toolbar.ToolBar()
+        picker = bar._tool_buttons["screenpick"]
+        self.assertEqual(picker.iconSize(), QSize(40, 40))
+        self.assertEqual(picker.toolTip(), "Colour Picker (Ctrl+Shift+P)")
+        self.assertIn("QToolTip", bar.styleSheet())
+        self.assertEqual(bar._format_combo.currentData(), "hex")
 
 
 if __name__ == "__main__":

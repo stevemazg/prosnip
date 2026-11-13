@@ -40,6 +40,7 @@ def _bring_to_front(window: QWidget) -> None:
 
 class MainWindow(QMainWindow):
     new_capture_requested = pyqtSignal()
+    colour_pick_requested = pyqtSignal()
     record_requested = pyqtSignal()
     quit_requested = pyqtSignal()
     hidden_to_tray = pyqtSignal()
@@ -109,6 +110,11 @@ class MainWindow(QMainWindow):
         self.new_capture_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.new_capture_button.clicked.connect(lambda: self.new_capture_requested.emit())
 
+        self.colour_pick_button = QPushButton("Colour Picker")
+        self.colour_pick_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.colour_pick_button.setToolTip("Pick a colour from the screen (Ctrl+Shift+P)")
+        self.colour_pick_button.clicked.connect(lambda: self.colour_pick_requested.emit())
+
         self.record_button = QPushButton("Record")
         self.record_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.record_button.clicked.connect(lambda: self.record_requested.emit())
@@ -116,6 +122,10 @@ class MainWindow(QMainWindow):
         self.shortcut_label = QLabel(shortcut_status_text(None))
         self.shortcut_label.setObjectName("shortcut")
         self.shortcut_label.setWordWrap(True)
+
+        self.picker_shortcut_label = QLabel("Colour picker: Ctrl+Shift+P")
+        self.picker_shortcut_label.setObjectName("shortcut")
+        self.picker_shortcut_label.setWordWrap(True)
 
         self.quit_button = QPushButton("Quit")
         self.quit_button.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -125,8 +135,10 @@ class MainWindow(QMainWindow):
         layout.addWidget(version)
         layout.addSpacing(8)
         layout.addWidget(self.new_capture_button)
+        layout.addWidget(self.colour_pick_button)
         layout.addWidget(self.record_button)
         layout.addWidget(self.shortcut_label)
+        layout.addWidget(self.picker_shortcut_label)
         layout.addStretch(1)
         layout.addWidget(self.quit_button)
 

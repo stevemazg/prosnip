@@ -49,6 +49,8 @@ def capture_demo_screenshots(folder: Path) -> int:
         saved.append(_text_background(folder / "09-text-background.png"))
         saved.append(_image_placeholder(editor, folder / "10-image-placeholder.png"))
         saved.append(_toolbar_tooltip(editor, folder / "11-toolbar-tooltip.png"))
+        saved.append(_grab(editor._toolbar, folder / "12-toolbar.png"))
+        saved.append(_picker_loupe(folder / "13-picker-loupe.png"))
         editor.close()
         saved.append(_record_dialog(folder / "04-record-picker.png"))
         saved.append(_rec_control(folder / "05-rec-control.png"))
@@ -235,6 +237,49 @@ def _toolbar_tooltip(editor, path: Path) -> Path:
     if tip.height() > 160:
         raise RuntimeError(f"Tooltip grab is the wrong window ({tip.width()}x{tip.height()})")
     return grabbed
+
+
+def _picker_loupe(path: Path) -> Path:
+    from PyQt6.QtGui import QImage, QPainter, QPixmap
+
+    from colour import ColourHistory
+    from colour_picker import _PickerOverlay
+
+    image = QImage(240, 160, QImage.Format.Format_ARGB32)
+    image.fill(QColor("#1a2b3c"))
+    painter = QPainter(image)
+    painter.fillRect(80, 40, 80, 80, QColor("#e63946"))
+    painter.fillRect(120, 70, 40, 40, QColor("#f4a261"))
+    painter.end()
+    if QApplication.instance() is None:
+        QApplication([])
+    screen = QGuiApplication.primaryScreen()
+    if screen is None:
+        raise RuntimeError("No screen is available for the colour picker grab")
+
+    class _Preview:
+        def __init__(self):
+            self.history = ColourHistory(path=path.with_suffix(".json"))
+            self.history.format = "hex"
+            self.history.zoom = 8
+            self.history.colours = ["#E63946", "#1A2B3C", "#F4A261", "#1D3557"]
+
+        def set_zoom(self, zoom):
+            self.history.zoom = zoom
+
+        def cycle_format(self):
+            return None
+
+        def finish(self, _hex_code):
+            return None
+
+    overlay = _PickerOverlay(_Preview(), screen, QPixmap.fromImage(image))
+    overlay.resize(720, 460)
+    overlay.set_sample_pixel(100, 80)
+    try:
+        return _grab(overlay, path)
+    finally:
+        overlay.close()
 
 
 def _record_dialog(path: Path) -> Path:

@@ -62,7 +62,9 @@ jobs:
             "08-stamp-picker.png",
             "09-text-background.png",
             "10-image-placeholder.png",
-            "11-toolbar-tooltip.png"
+            "11-toolbar-tooltip.png",
+            "12-toolbar.png",
+            "13-picker-loupe.png"
           )) {
             $file = Join-Path screenshots $name
             if (-not (Test-Path $file)) { throw "Missing $name" }

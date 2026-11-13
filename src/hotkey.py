@@ -23,8 +23,11 @@ MOD_WIN = 0x0008
 MOD_NOREPEAT = 0x4000
 HOTKEY_MODIFIERS = MOD_CONTROL | MOD_SHIFT | MOD_NOREPEAT
 VK_S = 0x53
+VK_P = 0x50
 WM_HOTKEY = 0x0312
 HOTKEY_ID = 1
+PICK_HOTKEY_ID = 2
+PICK_HOTKEY_MODIFIERS = MOD_CONTROL | MOD_SHIFT | MOD_NOREPEAT
 
 WINDOWS_MSG_EVENT = "windows_generic_MSG"
 
@@ -34,6 +37,13 @@ TAKEN_MESSAGE = (
 )
 UNAVAILABLE_MESSAGE = (
     "Ctrl+Shift+S is only available on Windows. Use the tray icon to capture."
+)
+PICK_TAKEN_MESSAGE = (
+    "Could not register Ctrl+Shift+P. It may already be in use. "
+    "Use Colour Picker on the window instead."
+)
+PICK_UNAVAILABLE_MESSAGE = (
+    "Ctrl+Shift+P is only available on Windows. Use Colour Picker on the window instead."
 )
 
 # The layout matches the Windows MSG the process is running under.
@@ -113,8 +123,24 @@ class _HotkeyAnchor(QWidget):
 
 
 class GlobalHotkey:
-    def __init__(self, on_triggered):
+    def __init__(
+        self,
+        on_triggered,
+        *,
+        hotkey_id: int = HOTKEY_ID,
+        modifiers: int = HOTKEY_MODIFIERS,
+        virtual_key: int = VK_S,
+        label: str = "Ctrl+Shift+S",
+        taken_message: str = TAKEN_MESSAGE,
+        unavailable_message: str = UNAVAILABLE_MESSAGE,
+    ):
         self._on_triggered = on_triggered
+        self._hotkey_id = hotkey_id
+        self._modifiers = modifiers
+        self._virtual_key = virtual_key
+        self._label = label
+        self._taken_message = taken_message
+        self._unavailable_message = unavailable_message
         self._registered = False
         self._anchor: _HotkeyAnchor | None = None
         self._filter: HotkeyEventFilter | None = None
@@ -122,21 +148,21 @@ class GlobalHotkey:
         self._app = None
 
     def register(self, app) -> str | None:
-        """Register Ctrl+Shift+S.
+        """Register this hotkey.
 
         Returns None on success, or a short message suitable for the tray
-        when the hotkey could not be registered.
+        when the hotkey could not be registered. The default is Ctrl+Shift+S.
         """
         if self._registered:
             return None
         if sys.platform != "win32":
-            return UNAVAILABLE_MESSAGE
+            return self._unavailable_message
         try:
             return self._register_windows(app)
         except Exception:
             log.exception("Failed to register the global hotkey")
             self.unregister()
-            return TAKEN_MESSAGE
+            return self._taken_message
 
     def _register_windows(self, app) -> str | None:
         user32 = ctypes.WinDLL("user32", use_last_error=True)
@@ -151,23 +177,23 @@ class GlobalHotkey:
         self._app = app
         self._anchor = _HotkeyAnchor()
         self._hwnd = int(self._anchor.winId())
-        self._filter = HotkeyEventFilter(HOTKEY_ID, self._on_triggered)
+        self._filter = HotkeyEventFilter(self._hotkey_id, self._on_triggered)
         app.installNativeEventFilter(self._filter)
 
         registered = user32.RegisterHotKey(
             self._hwnd,
-            HOTKEY_ID,
-            HOTKEY_MODIFIERS,
-            VK_S,
+            self._hotkey_id,
+            self._modifiers,
+            self._virtual_key,
         )
         if not registered:
             error = ctypes.get_last_error()
-            log.error("RegisterHotKey failed (Win32 error %s)", error)
+            log.error("RegisterHotKey failed for %s (Win32 error %s)", self._label, error)
             self.unregister()
-            return TAKEN_MESSAGE
+            return self._taken_message
 
         self._registered = True
-        log.info("Registered Ctrl+Shift+S (hotkey id %s)", HOTKEY_ID)
+        log.info("Registered %s (hotkey id %s)", self._label, self._hotkey_id)
         return None
 
     def unregister(self) -> None:
@@ -176,7 +202,7 @@ class GlobalHotkey:
                 user32 = ctypes.WinDLL("user32", use_last_error=True)
                 user32.UnregisterHotKey.argtypes = [wintypes.HWND, ctypes.c_int]
                 user32.UnregisterHotKey.restype = wintypes.BOOL
-                user32.UnregisterHotKey(self._hwnd, HOTKEY_ID)
+                user32.UnregisterHotKey(self._hwnd, self._hotkey_id)
             except Exception:
                 log.exception("Failed to unregister the global hotkey")
         if self._app is not None and self._filter is not None:

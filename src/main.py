@@ -10,7 +10,14 @@ from PyQt6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
 import demo_screenshots
 from capture import CaptureOverlay
 from editor import APP_NAME, APP_VERSION, EditorWindow
-from hotkey import GlobalHotkey
+from hotkey import (
+    PICK_HOTKEY_ID,
+    PICK_HOTKEY_MODIFIERS,
+    PICK_TAKEN_MESSAGE,
+    PICK_UNAVAILABLE_MESSAGE,
+    VK_P,
+    GlobalHotkey,
+)
 from instance import claim_primary, release_server
 from main_window import MainWindow
 from recorder import GrabSource, RecordDialog, ScreenRecorder, WindowGrabSource, video_output_path
@@ -176,6 +183,11 @@ class ProSnipApp:
 
         self._tray = None
         self._hotkey: GlobalHotkey | None = None
+        self._pick_hotkey: GlobalHotkey | None = None
+        self._picker = None
+        self._picker_pending = False
+        self._pick_target = None
+        self._hidden_editors: list[EditorWindow] = []
         self._main_window: MainWindow | None = None
         self._server = None
         self._main_has_been_shown = False
@@ -200,7 +212,9 @@ class ProSnipApp:
         self._register_hotkey()
 
     def _capture_in_progress(self) -> bool:
-        if self._capture_pending:
+        if self._capture_pending or self._picker_pending:
+            return True
+        if self._picker is not None and self._picker.is_active:
             return True
         return self._session is not None and self._session.is_active
 
@@ -219,6 +233,7 @@ class ProSnipApp:
         self._stop_recording_action = menu.addAction("Stop recording")
         self._stop_recording_action.triggered.connect(self._stop_recording)
         self._stop_recording_action.setVisible(False)
+        menu.addAction("Colour Picker", lambda: self._show_colour_picker(None))
         menu.addSeparator()
         action_quit = menu.addAction(f"Quit {APP_NAME}")
         action_quit.triggered.connect(self._quit)
@@ -231,6 +246,7 @@ class ProSnipApp:
         icon = self._tray.icon() if self._tray is not None else None
         self._main_window = MainWindow(icon)
         self._main_window.new_capture_requested.connect(self._show_capture)
+        self._main_window.colour_pick_requested.connect(lambda: self._show_colour_picker(None))
         self._main_window.record_requested.connect(lambda: self._open_record_dialog("monitor"))
         self._main_window.quit_requested.connect(self._quit)
         self._main_window.hidden_to_tray.connect(self._on_hidden_to_tray)
@@ -276,6 +292,18 @@ class ProSnipApp:
             self._main_window.set_shortcut_status(reason)
         if reason:
             self._notify(reason)
+        self._pick_hotkey = GlobalHotkey(
+            lambda: self._show_colour_picker(None),
+            hotkey_id=PICK_HOTKEY_ID,
+            modifiers=PICK_HOTKEY_MODIFIERS,
+            virtual_key=VK_P,
+            label="Ctrl+Shift+P",
+            taken_message=PICK_TAKEN_MESSAGE,
+            unavailable_message=PICK_UNAVAILABLE_MESSAGE,
+        )
+        pick_reason = self._pick_hotkey.register(self._app)
+        if pick_reason and sys.platform == "win32":
+            self._notify(pick_reason)
 
     def _notify(self, message: str, warning: bool = True):
         log.info("%s", message)
@@ -321,6 +349,77 @@ class ProSnipApp:
         self._restore_main_after_capture = False
         if should_restore:
             self._show_main_window()
+
+    def _show_colour_picker(self, editor=None):
+        if self._capture_in_progress():
+            log.info("Ignoring a colour picker request because a capture is already open")
+            return
+        self._picker_pending = True
+        self._pick_target = editor
+        self._restore_main_after_capture = (
+            self._main_window is not None and self._main_window.isVisible()
+        )
+        self._hidden_editors = [item for item in self._editors if item.isVisible()]
+        for item in self._hidden_editors:
+            item.hide()
+        try:
+            self._hide_for_capture()
+            QTimer.singleShot(150, self._do_colour_picker)
+        except Exception:
+            log.exception("Failed to start the colour picker")
+            self._picker_pending = False
+            self._finish_picker_ui()
+            self._notify("Could not start the colour picker. See the log for details.")
+
+    def _do_colour_picker(self):
+        if self._picker is not None and self._picker.is_active:
+            return
+        try:
+            from colour_picker import ColourPicker
+
+            picker = ColourPicker(callback=self._on_colour_picked)
+            self._picker = picker
+            picker.show()
+        except Exception:
+            log.exception("Failed to start the colour picker")
+            picker = self._picker
+            self._picker = None
+            if picker is not None:
+                picker.abandon()
+            self._picker_pending = False
+            self._finish_picker_ui()
+            self._notify("Could not start the colour picker. See the log for details.")
+
+    def _on_colour_picked(self, hex_code):
+        self._picker_pending = False
+        self._picker = None
+        target = self._pick_target
+        self._pick_target = None
+        self._finish_picker_ui()
+        for editor in list(self._editors):
+            try:
+                editor._toolbar.reload_history()
+            except Exception:
+                log.exception("Could not refresh recent colours")
+        if not hex_code or target is None:
+            return
+        try:
+            colour = QColor(hex_code)
+            target._toolbar.set_pen_colour(colour)
+            target._scene.set_pen_color(colour)
+        except Exception:
+            log.exception("Could not apply the picked colour")
+
+    def _finish_picker_ui(self):
+        self._restore_after_capture()
+        for editor in list(self._hidden_editors):
+            try:
+                if editor.isVisible() is False:
+                    editor.show()
+                    editor.raise_()
+            except RuntimeError:
+                continue
+        self._hidden_editors = []
 
     def _do_capture(self):
         if self._session is not None and self._session.is_active:
@@ -452,6 +551,9 @@ class ProSnipApp:
         editor.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
         self._editors.append(editor)
         editor.destroyed.connect(lambda *_args, ed=editor: self._forget_editor(ed))
+        editor._toolbar.screen_pick_requested.connect(
+            lambda ed=editor: self._show_colour_picker(ed)
+        )
         editor.show()
         editor.raise_()
         editor.activateWindow()
@@ -470,6 +572,8 @@ class ProSnipApp:
         try:
             if self._hotkey is not None:
                 self._hotkey.unregister()
+            if self._pick_hotkey is not None:
+                self._pick_hotkey.unregister()
         except Exception:
             log.exception("Failed to unregister the hotkey")
         self.release_single_instance()
