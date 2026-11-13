@@ -109,7 +109,8 @@ def _editor_window():
     from items import ArrowItem, StrokeItem, TextItem
 
     window = EditorWindow(_sample_image())
-    window.resize(1100, 720)
+    window.resize(1280, 860)
+    window._place_tools()
     scene = window._scene
     pen = StrokeItem(QColor("#e63946"), 4)
     for point in ((90, 140), (180, 210), (280, 150), (390, 230)):
@@ -288,6 +289,8 @@ def _small_editor(path: Path) -> Path:
     from editor import EditorWindow
 
     window = EditorWindow(Image.new("RGB", (240, 140), "#d7e6f5"))
+    window.resize(1180, 760)
+    window._place_tools()
     try:
         return _grab(window, path)
     finally:
