@@ -37,6 +37,26 @@ jobs:
         run: |
           .venv\Scripts\python.exe -c "import sys; sys.path.insert(0, 'src'); import capture, editor, canvas, items, toolbar, stamp_picker, styles, hotkey, instance, main_window, window_list, recorder, main"
 
+      - name: Read application version
+        id: version
+        run: |
+          $editor = Get-Content -Raw -Path src/editor.py
+          $appVersion = [regex]::Match($editor, 'APP_VERSION\s*=\s*"([0-9]+(?:\.[0-9]+){3})"')
+          if (-not $appVersion.Success) { throw "APP_VERSION was not found in src/editor.py" }
+          $version = $appVersion.Groups[1].Value
+          $info = Get-Content -Raw -Path version_info.txt
+          $fileVersion = [regex]::Match($info, "StringStruct\('FileVersion',\s*'([^']+)'\)")
+          $productVersion = [regex]::Match($info, "StringStruct\('ProductVersion',\s*'([^']+)'\)")
+          if (-not $fileVersion.Success) { throw "FileVersion was not found in version_info.txt" }
+          if (-not $productVersion.Success) { throw "ProductVersion was not found in version_info.txt" }
+          if ($fileVersion.Groups[1].Value -ne $version -or $productVersion.Groups[1].Value -ne $version) {
+            throw "src/editor.py APP_VERSION $version does not match the version embedded in the executable (FileVersion $($fileVersion.Groups[1].Value), ProductVersion $($productVersion.Groups[1].Value))"
+          }
+          $name = "ProSnip-Bob-$version-win64"
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "version=$version" -Encoding utf8NoBOM
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "name=$name" -Encoding utf8NoBOM
+          Write-Host "Build download name: $name"
+
       - name: Build executable
         run: |
           $env:Path = "$PWD\.venv\Scripts;$env:Path"
@@ -44,14 +64,22 @@ jobs:
 
       - name: Zip application folder
         run: |
+          $bundle = "${{ steps.version.outputs.name }}"
+          if ([string]::IsNullOrWhiteSpace($bundle)) { throw "The versioned bundle name is empty" }
           if (-not (Test-Path dist\ProSnip-Bob\ProSnip-Bob.exe)) { throw "ProSnip-Bob.exe was not produced" }
           if (-not (Test-Path dist\ProSnip-Bob\_internal)) { throw "The _internal folder is missing" }
-          if (Test-Path dist\ProSnip-Bob.zip) { Remove-Item dist\ProSnip-Bob.zip }
-          Compress-Archive -Path dist\ProSnip-Bob -DestinationPath dist\ProSnip-Bob.zip
+          if (Test-Path "dist\$bundle") { Remove-Item "dist\$bundle" -Recurse -Force }
+          Rename-Item -Path dist\ProSnip-Bob -NewName $bundle
+          if (-not (Test-Path "dist\$bundle\ProSnip-Bob.exe")) { throw "The renamed folder is missing ProSnip-Bob.exe" }
+          $zip = "dist\$bundle.zip"
+          if (Test-Path $zip) { Remove-Item $zip }
+          Compress-Archive -Path "dist\$bundle" -DestinationPath $zip
+          Write-Host "Zip contents:"
+          tar -tf $zip
 
-      - name: Upload ProSnip-Bob.zip
+      - name: Upload versioned build
         uses: actions/upload-artifact@v4
         with:
-          name: ProSnip-Bob
-          path: dist/ProSnip-Bob.zip
+          name: ${{ steps.version.outputs.name }}
+          path: dist/${{ steps.version.outputs.name }}.zip
           if-no-files-found: error
