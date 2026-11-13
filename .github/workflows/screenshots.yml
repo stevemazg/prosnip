@@ -1,0 +1,81 @@
+name: Screenshots
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - prosnip-bob
+    paths:
+      - ".github/workflows/screenshots.yml"
+      - "src/demo_screenshots.py"
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  capture:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build ProSnip-Bob
+        run: |
+          python -m venv .venv
+          .venv\Scripts\python.exe -m pip install --upgrade pip
+          .venv\Scripts\python.exe -m pip install -r requirements.txt
+          $env:Path = "$PWD\.venv\Scripts;$env:Path"
+          pyinstaller --noconfirm --clean --onedir --windowed --noupx --name ProSnip-Bob --exclude-module tkinter --version-file version_info.txt src/main.py
+
+      - name: Capture windows from the built executable
+        run: |
+          New-Item -ItemType Directory -Force -Path screenshots | Out-Null
+          $proc = Start-Process -FilePath ".\dist\ProSnip-Bob\ProSnip-Bob.exe" -ArgumentList "--demo-screenshots","$PWD\screenshots" -Wait -PassThru
+          Write-Host "demo exit: $($proc.ExitCode)"
+          Get-ChildItem -Path screenshots | Format-Table Name, Length
+          if (Test-Path .\dist\ProSnip-Bob\ProSnip-Bob.log) {
+            Write-Host "----- ProSnip-Bob.log -----"
+            Get-Content .\dist\ProSnip-Bob\ProSnip-Bob.log -Tail 120
+          }
+          if (Test-Path .\screenshots\fault.log) {
+            Write-Host "----- fault.log -----"
+            Get-Content .\screenshots\fault.log
+          }
+          if ($null -eq $proc.ExitCode -or $proc.ExitCode -ne 0) { exit 1 }
+          foreach ($name in @(
+            "01-main-window.png",
+            "02-editor.png",
+            "03-colour-dropdown.png",
+            "06-arrow-presets.png",
+            "07-properties.png",
+            "08-stamp-picker.png",
+            "09-text-background.png",
+            "10-image-placeholder.png",
+            "11-toolbar-tooltip.png",
+            "12-toolbar.png",
+            "13-picker-loupe.png",
+            "14-editor-small.png",
+            "15-colour-card.png",
+            "16-swatches.png",
+            "17-no-trails.png"
+          )) {
+            $file = Join-Path screenshots $name
+            if (-not (Test-Path $file)) { throw "Missing $name" }
+          }
+
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ProSnip-Bob-screenshots
+          path: screenshots/*.png
+          if-no-files-found: error

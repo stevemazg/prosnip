@@ -2,20 +2,62 @@ from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
     QToolBar, QPushButton, QFileDialog, QDialog,
     QFormLayout, QSpinBox, QCheckBox, QDialogButtonBox,
-    QGraphicsPixmapItem, QApplication, QLabel
+    QGraphicsPixmapItem, QApplication, QLabel, QSizePolicy,
+    QScrollArea, QDockWidget,
 )
+from PyQt6.QtCore import Qt, QRectF, QEvent, QRect, pyqtSignal
 from PyQt6.QtGui import (
     QPixmap, QImage, QPainter, QColor, QKeySequence,
-    QShortcut
+    QShortcut, QKeyEvent, QGuiApplication,
 )
-from PyQt6.QtCore import Qt, QRectF, QPointF, QSize
 
 from canvas import ProSnipScene, ProSnipView
+from colour import ColourHistory
+from layout import fit_editor_frame
+from properties import PropertiesPanel
+from swatches import SwatchBook, SwatchPanel
 from toolbar import ToolBar
-from styles import QuickStyle
+from styles import QuickStyle, with_tooltip_style
 
 import io
-from PIL import Image
+import math
+from datetime import datetime
+from pathlib import Path
+from PIL import Image, ImageOps
+
+APP_NAME = "ProSnip-Bob"
+APP_VERSION = "1.5.2.0"
+
+
+def clamp_crop_rect(rect: QRectF, width: int, height: int) -> QRect | None:
+    """Intersect a crop with the image and return whole pixels inside it.
+
+    A drag that starts outside the picture used to be passed straight to
+    ``QPixmap.copy`` / ``Image.crop``, which then returned a null or shifted
+    image. Partial pixels on the edge are kept.
+    """
+    if width < 1 or height < 1:
+        return None
+    clipped = rect.normalized().intersected(QRectF(0, 0, width, height))
+    if clipped.isEmpty():
+        return None
+    left = max(0, math.floor(clipped.left()))
+    top = max(0, math.floor(clipped.top()))
+    right = min(width, math.ceil(clipped.right()))
+    bottom = min(height, math.ceil(clipped.bottom()))
+    if right <= left or bottom <= top:
+        return None
+    return QRect(int(left), int(top), int(right - left), int(bottom - top))
+
+
+def _crop_pil(image: Image.Image, crop: QRect) -> Image.Image:
+    left = max(0, min(crop.left(), image.width))
+    top = max(0, min(crop.top(), image.height))
+    right = max(left, min(crop.left() + crop.width(), image.width))
+    bottom = max(top, min(crop.top() + crop.height(), image.height))
+    if right <= left or bottom <= top:
+        return image
+    return image.crop((left, top, right, bottom))
 
 
 def pil_to_qpixmap(pil_img: Image.Image) -> QPixmap:
@@ -87,37 +129,62 @@ class ResizeDialog(QDialog):
 
 
 class EditorWindow(QMainWindow):
+    screen_pick_requested = pyqtSignal()
+
     def __init__(self, pil_image: Image.Image, parent=None):
         super().__init__(parent)
         self._pil_image = pil_image
         self._filename = None
         self._bg_item = None
 
-        self.setWindowTitle("ProSnip — Untitled")
-        self.setMinimumSize(900, 600)
-        self.setStyleSheet("background-color: #2b2b2b;")
+        self.setWindowTitle(f"{APP_NAME} — Untitled")
+        # Wide enough for the top actions, tall enough for two tool columns.
+        self.setMinimumSize(1080, 680)
+        self.setStyleSheet(with_tooltip_style("background-color: #2b2b2b;"))
 
+        self._placing_tools = False
         self._scene = ProSnipScene()
         self._view = ProSnipView(self._scene)
         self._toolbar = ToolBar()
 
+        self._history = ColourHistory()
+        self._swatches = SwatchBook(self._history.path)
         self._setup_background()
         self._setup_ui()
         self._connect_signals()
         self._setup_shortcuts()
+        self.fit_to_screen()
 
     def _setup_background(self):
         pixmap = pil_to_qpixmap(self._pil_image)
+        pixmap.setDevicePixelRatio(1.0)
         self._bg_item = QGraphicsPixmapItem(pixmap)
         self._bg_item.setZValue(-100)
         self._scene.addItem(self._bg_item)
         self._scene.setSceneRect(QRectF(pixmap.rect()))
 
+    def fit_to_screen(self):
+        screen = self.screen() or QGuiApplication.primaryScreen()
+        if screen is None:
+            self.resize(960, 640)
+            return
+        frame = fit_editor_frame(
+            self._pil_image.width,
+            self._pil_image.height,
+            400,
+            56,
+            screen.availableGeometry(),
+            screen.devicePixelRatio() or 1.0,
+            minimum_w=self.minimumWidth(),
+            minimum_h=self.minimumHeight(),
+        )
+        self.setGeometry(*frame)
+        self._place_tools()
+
     def _setup_ui(self):
-        # Top action toolbar
         top_bar = QToolBar("Actions")
         top_bar.setMovable(False)
-        top_bar.setStyleSheet("""
+        top_bar.setStyleSheet(with_tooltip_style("""
             QToolBar { background: #1e1e1e; border: none; spacing: 4px; padding: 4px; }
             QPushButton {
                 background: #2d2d2d; border: 1px solid #3d3d3d;
@@ -125,7 +192,7 @@ class EditorWindow(QMainWindow):
                 padding: 4px 10px; font-size: 12px;
             }
             QPushButton:hover { background: #3d3d3d; }
-        """)
+        """))
         self.addToolBar(Qt.ToolBarArea.TopToolBarArea, top_bar)
 
         def _tb_btn(label, tooltip=""):
@@ -134,27 +201,134 @@ class EditorWindow(QMainWindow):
             btn.setFixedHeight(30)
             return btn
 
-        self._btn_save_png = _tb_btn("Save PNG", "Save as PNG (Ctrl+S)")
-        self._btn_save_jpg = _tb_btn("Save JPG", "Save as JPG")
-        self._btn_copy = _tb_btn("Copy", "Copy to clipboard (Ctrl+C)")
+        self._btn_save_png = _tb_btn("Save PNG", "Save PNG (Ctrl+S)")
+        self._btn_save_jpg = _tb_btn("Save JPG", "Save JPG")
+        self._btn_copy = _tb_btn("Copy", "Copy (Ctrl+C)")
         self._btn_resize = _tb_btn("Resize…", "Resize canvas")
-
-        for btn in [self._btn_save_png, self._btn_save_jpg, self._btn_copy, self._btn_resize]:
+        self._btn_rotate = _tb_btn("Rotate", "Rotate image 90°")
+        self._btn_flip = _tb_btn("Flip", "Flip image horizontally")
+        self._btn_border = _tb_btn("Border", "Add a border")
+        self._btn_forward = _tb_btn("Forward", "Bring forward")
+        self._btn_back = _tb_btn("Back", "Send back")
+        self._btn_lock = _tb_btn("Lock", "Lock or unlock the selection")
+        for btn in (
+            self._btn_save_png, self._btn_save_jpg, self._btn_copy, self._btn_resize,
+            self._btn_rotate, self._btn_flip, self._btn_border,
+            self._btn_forward, self._btn_back, self._btn_lock,
+        ):
+            btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
             top_bar.addWidget(btn)
+        self._top_bar = top_bar
 
-        # Central layout
         central = QWidget()
         self.setCentralWidget(central)
-        hlayout = QHBoxLayout(central)
-        hlayout.setContentsMargins(0, 0, 0, 0)
-        hlayout.setSpacing(0)
-        hlayout.addWidget(self._toolbar)
-        hlayout.addWidget(self._view, 1)
+        self._toolbar.setObjectName("ToolPanel")
+        self._view.setObjectName("EditorCanvas")
+        row = QHBoxLayout(central)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(0)
+        row.addWidget(self._toolbar, 0)
+        row.addWidget(self._view, 1)
+
+        self._properties = PropertiesPanel()
+        self._properties.bind(self._scene, self._toolbar)
+        right = QWidget()
+        right_layout = QVBoxLayout(right)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(0)
+        right_layout.addWidget(self._toolbar.controls_panel)
+        right_layout.addWidget(self._properties, 1)
+        right_scroll = QScrollArea()
+        right_scroll.setWidget(right)
+        right_scroll.setWidgetResizable(True)
+        right_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        right_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._swatch_panel = SwatchPanel(self._swatches, self._apply_swatch)
+        self._swatch_panel.setMinimumHeight(200)
+        self._properties_dock = self._dock("Properties", right_scroll)
+        self._swatch_dock = self._dock("Swatches", self._swatch_panel)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self._properties_dock)
+        self.splitDockWidget(self._properties_dock, self._swatch_dock, Qt.Orientation.Vertical)
+        self._place_tools()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if getattr(self, "_properties_dock", None) is None:
+            return
+        height = max(1, self.height())
+        self.resizeDocks(
+            [self._properties_dock, self._swatch_dock],
+            [int(height * 0.62), int(height * 0.28)],
+            Qt.Orientation.Vertical,
+        )
+
+    def _place_tools(self):
+        top = self._top_bar.height() if getattr(self, "_top_bar", None) is not None else 48
+        self._toolbar.arrange(max(240, self.height() - top - 8))
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if getattr(self, "_placing_tools", False) or getattr(self, "_toolbar", None) is None:
+            return
+        self._placing_tools = True
+        try:
+            self._place_tools()
+        finally:
+            self._placing_tools = False
+
+    def _dock(self, title: str, widget: QWidget) -> QDockWidget:
+        dock = QDockWidget(title, self)
+        dock.setWidget(widget)
+        dock.setAllowedAreas(Qt.DockWidgetArea.RightDockWidgetArea | Qt.DockWidgetArea.LeftDockWidgetArea)
+        dock.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetClosable)
+        dock.setFloating(False)
+        return dock
+
+    def assert_tools_left_of_canvas(self) -> None:
+        """Fail if the tools are not a left-hand column beside the canvas."""
+        from PyQt6.QtWidgets import QScrollArea
+
+        panel = self._toolbar
+        view = self._view
+        origin = panel.mapTo(self, panel.rect().topLeft())
+        view_origin = view.mapTo(self, view.rect().topLeft())
+        panel_rect = QRect(origin, panel.size())
+        view_rect = QRect(view_origin, view.size())
+        problems = []
+        if panel.width() < 40 or panel.height() < 200:
+            problems.append(f"tool panel is too small ({panel.width()}x{panel.height()})")
+        if origin.x() >= view_origin.x():
+            problems.append(f"tool panel x {origin.x()} is not left of the canvas x {view_origin.x()}")
+        if panel_rect.intersects(view_rect):
+            problems.append(f"tool panel {panel_rect.getRect()} overlaps the canvas {view_rect.getRect()}")
+        if len(panel._tool_buttons) != 16:
+            problems.append(f"expected 16 tools, found {len(panel._tool_buttons)}")
+        for tool_id, button in panel._tool_buttons.items():
+            if not button.isVisible():
+                problems.append(f"{tool_id} is not visible")
+            ancestor = button.parentWidget()
+            while ancestor is not None:
+                if isinstance(ancestor, QScrollArea):
+                    problems.append(f"{tool_id} is inside a scroll area")
+                    break
+                ancestor = ancestor.parentWidget()
+        if problems:
+            raise RuntimeError("Editor tool layout failed: " + "; ".join(problems))
+
+    def _apply_swatch(self, hex_code: str):
+        colour = QColor(hex_code)
+        self._toolbar.set_pen_colour(colour)
+        self._scene.set_pen_color(colour)
+        clipboard = QApplication.clipboard()
+        if clipboard is not None:
+            clipboard.setText(self._history.display(hex_code))
 
     def _connect_signals(self):
         self._toolbar.tool_changed.connect(self._on_tool_changed)
         self._toolbar.style_changed.connect(self._on_style_changed)
         self._toolbar.pen_color_changed.connect(self._scene.set_pen_color)
+        self._scene.colour_picked.connect(self._toolbar.set_pen_colour)
+        self._scene.colour_picked.connect(lambda _colour: self._properties.refresh())
         self._toolbar.line_width_changed.connect(self._scene.set_line_width)
         self._toolbar.font_size_changed.connect(self._scene.set_font_size)
         self._toolbar.undo_requested.connect(self._scene.undo)
@@ -165,15 +339,73 @@ class EditorWindow(QMainWindow):
         self._btn_save_jpg.clicked.connect(self._save_jpg)
         self._btn_copy.clicked.connect(self._copy_clipboard)
         self._btn_resize.clicked.connect(self._resize_image)
+        self._btn_rotate.clicked.connect(self._rotate_image)
+        self._btn_flip.clicked.connect(self._flip_image)
+        self._btn_border.clicked.connect(self._add_border)
+        self._btn_forward.clicked.connect(self._scene.bring_forward)
+        self._btn_back.clicked.connect(self._scene.send_back)
+        self._btn_lock.clicked.connect(self._scene.toggle_lock)
+        self._toolbar.screen_pick_requested.connect(self.screen_pick_requested.emit)
 
     def _setup_shortcuts(self):
         QShortcut(QKeySequence("Ctrl+S"), self).activated.connect(self._save_png)
+        QShortcut(QKeySequence("Ctrl+C"), self).activated.connect(self._copy_clipboard)
         QShortcut(QKeySequence("Ctrl+Shift+C"), self).activated.connect(self._copy_clipboard)
+        QShortcut(QKeySequence("Ctrl+V"), self).activated.connect(self._scene.paste_clipboard)
+        QShortcut(QKeySequence("Ctrl+D"), self).activated.connect(self._scene.duplicate_selected)
         QShortcut(QKeySequence("Ctrl+Z"), self).activated.connect(self._scene.undo)
-        QShortcut(QKeySequence("Delete"), self).activated.connect(self._scene.delete_selected)
+        QShortcut(QKeySequence("Ctrl+Y"), self).activated.connect(self._scene.redo)
+        QShortcut(QKeySequence("Ctrl+0"), self).activated.connect(self._view.fit_scene)
+        QShortcut(QKeySequence("Ctrl+1"), self).activated.connect(self._view.resetTransform)
+        for key, tool in (
+            ("V", "select"),
+            ("A", "arrow"),
+            ("T", "text"),
+            ("P", "pen"),
+            ("H", "highlight"),
+            ("R", "rect"),
+            ("E", "ellipse"),
+            ("B", "blur"),
+            ("N", "number"),
+            ("C", "crop"),
+            ("I", "screenpick"),
+            ("X", "eraser"),
+        ):
+            QShortcut(QKeySequence(key), self).activated.connect(lambda tool=tool: self._select_tool(tool))
+        QShortcut(QKeySequence(Qt.Key.Key_Delete), self).activated.connect(self._on_delete_shortcut)
         QShortcut(QKeySequence("Escape"), self).activated.connect(
             lambda: self._on_tool_changed("select")
         )
+
+    def _on_delete_shortcut(self):
+        """Delete the selection, unless a text box is being edited.
+
+        The window-level shortcut runs before the graphics view sees the key.
+        While text is being edited, send Delete through to that text box
+        instead of removing the item.
+        """
+        if self._view.is_text_editing():
+            self._forward_edit_key(Qt.Key.Key_Delete)
+            return
+        self._scene.delete_selected()
+
+    def _forward_edit_key(self, key: Qt.Key):
+        item = self._scene.focusItem()
+        if item is None:
+            return
+        self._scene.sendEvent(
+            item,
+            QKeyEvent(QEvent.Type.KeyPress, key, Qt.KeyboardModifier.NoModifier),
+        )
+
+    def _select_tool(self, tool: str):
+        if self._view.is_text_editing():
+            return
+        if tool == "screenpick":
+            self.screen_pick_requested.emit()
+            return
+        self._on_tool_changed(tool)
+        self._view.set_select_drag(tool == "select")
 
     def _on_tool_changed(self, tool: str):
         self._scene.set_tool(tool)
@@ -197,31 +429,75 @@ class EditorWindow(QMainWindow):
         painter.end()
         return img
 
+    def _default_save_path(self, suffix: str) -> str:
+        folder = self._history.last_folder or str(Path.home() / "Pictures")
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        return str(Path(folder) / f"ProSnip-Bob_{stamp}{suffix}")
+
+    def _remember_save(self, path: str) -> None:
+        self._filename = path
+        self._history.set_last_folder(str(Path(path).parent))
+        self.setWindowTitle(f"{APP_NAME} — {path}")
+
     def _save_png(self):
         path, _ = QFileDialog.getSaveFileName(
-            self, "Save as PNG", self._filename or "screenshot.png",
+            self, "Save as PNG", self._filename or self._default_save_path(".png"),
             "PNG Images (*.png)"
         )
         if path:
             img = self._render_scene()
             img.save(path, "PNG")
-            self._filename = path
-            self.setWindowTitle(f"ProSnip — {path}")
+            self._remember_save(path)
 
     def _save_jpg(self):
         path, _ = QFileDialog.getSaveFileName(
-            self, "Save as JPG", self._filename or "screenshot.jpg",
+            self, "Save as JPG", self._filename or self._default_save_path(".jpg"),
             "JPEG Images (*.jpg *.jpeg)"
         )
         if path:
             img = self._render_scene()
             img.save(path, "JPEG", 95)
-            self._filename = path
-            self.setWindowTitle(f"ProSnip — {path}")
+            self._remember_save(path)
 
     def _copy_clipboard(self):
+        selected = [item for item in self._scene.selectedItems() if item.parentItem() is None]
+        if selected:
+            self._scene.copy_selected()
+            return
         img = self._render_scene()
-        QApplication.clipboard().setImage(img)
+        clipboard = QApplication.clipboard()
+        if clipboard is not None:
+            clipboard.setImage(img)
+
+    def _replace_pixmap(self, pixmap: QPixmap, image: Image.Image) -> None:
+        pixmap.setDevicePixelRatio(1.0)
+        self._bg_item.setPixmap(pixmap)
+        self._bg_item.setPos(0, 0)
+        self._scene.setSceneRect(QRectF(pixmap.rect()))
+        self._pil_image = image
+        self._scene.update()
+
+    def _rotate_image(self):
+        if self._bg_item is None:
+            return
+        turned = self._pil_image.transpose(Image.Transpose.ROTATE_90)
+        self._replace_pixmap(pil_to_qpixmap(turned), turned)
+
+    def _flip_image(self):
+        if self._bg_item is None:
+            return
+        flipped = ImageOps.mirror(self._pil_image)
+        self._replace_pixmap(pil_to_qpixmap(flipped), flipped)
+
+    def _add_border(self):
+        if self._bg_item is None:
+            return
+        bordered = ImageOps.expand(self._pil_image.convert("RGBA"), border=12, fill=(255, 255, 255, 255))
+        shadowed = Image.new("RGBA", (bordered.width + 16, bordered.height + 16), (0, 0, 0, 0))
+        shade = Image.new("RGBA", bordered.size, (0, 0, 0, 90))
+        shadowed.paste(shade, (10, 10), shade)
+        shadowed.paste(bordered, (0, 0), bordered)
+        self._replace_pixmap(pil_to_qpixmap(shadowed.convert("RGB")), shadowed.convert("RGB"))
 
     def _resize_image(self):
         if self._bg_item is None:
@@ -244,20 +520,19 @@ class EditorWindow(QMainWindow):
         if self._bg_item is None:
             return
         px = self._bg_item.pixmap()
-        # Crop the pixmap
-        cropped_px = px.copy(rect.toRect())
+        crop = clamp_crop_rect(rect, px.width(), px.height())
+        if crop is None:
+            return
+        cropped_px = px.copy(crop)
+        if cropped_px.isNull():
+            return
         self._bg_item.setPixmap(cropped_px)
-        # Shift scene origin
-        offset = rect.topLeft()
         self._bg_item.setPos(0, 0)
-        self._scene.setSceneRect(QRectF(0, 0, rect.width(), rect.height()))
-        # Shift all other items
+        self._scene.setSceneRect(QRectF(0, 0, crop.width(), crop.height()))
+        # Child handles live in their parent's coordinates. Moving them as
+        # well as the parent shifts them twice.
         for item in self._scene.items():
-            if item is self._bg_item:
+            if item is self._bg_item or item.parentItem() is not None:
                 continue
-            item.moveBy(-offset.x(), -offset.y())
-        # Update PIL image
-        self._pil_image = self._pil_image.crop((
-            int(rect.left()), int(rect.top()),
-            int(rect.right()), int(rect.bottom())
-        ))
+            item.moveBy(-float(crop.left()), -float(crop.top()))
+        self._pil_image = _crop_pil(self._pil_image, crop)
