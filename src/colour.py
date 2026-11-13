@@ -92,27 +92,36 @@ def settings_path() -> Path:
 
 
 class ColourHistory:
-    """Last few colours, the chosen code format, and the loupe zoom."""
+    """Last few colours, the chosen code format, and the loupe zoom.
+
+    Other settings (saved swatches, the last folder) share this file.
+    Saving merges so those keys are not wiped.
+    """
 
     def __init__(self, path: Path | None = None):
         self.path = Path(path) if path is not None else settings_path()
         self.format = "hex"
         self.zoom = ZOOM_DEFAULT
         self.colours: list[str] = []
+        self.auto_copy = False
+        self.last_folder = ""
+        self._extra: dict = {}
         self.load()
 
     def load(self) -> None:
-        if not self.path.is_file():
-            return
-        try:
-            data = json.loads(self.path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError, UnicodeError):
-            return
+        data = _read_json(self.path)
         if not isinstance(data, dict):
             return
+        self._extra = {
+            key: value
+            for key, value in data.items()
+            if key not in {"colour_format", "loupe_zoom", "recent_colours", "auto_copy", "last_folder"}
+        }
         fmt = data.get("colour_format", "hex")
         self.format = fmt if fmt in FORMATS else "hex"
         self.zoom = clamp_zoom(data.get("loupe_zoom", ZOOM_DEFAULT))
+        self.auto_copy = bool(data.get("auto_copy", False))
+        self.last_folder = str(data.get("last_folder", "") or "")
         colours = []
         for item in data.get("recent_colours", []):
             parsed = parse_hex(str(item))
@@ -124,18 +133,23 @@ class ColourHistory:
         self.colours = colours[:HISTORY_LIMIT]
 
     def save(self) -> None:
-        payload = {
+        payload = _read_json(self.path)
+        payload.update({
             "colour_format": self.format,
             "loupe_zoom": self.zoom,
             "recent_colours": list(self.colours),
-        }
-        try:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            temporary = self.path.with_suffix(".json.tmp")
-            temporary.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-            temporary.replace(self.path)
-        except OSError:
-            return
+            "auto_copy": self.auto_copy,
+            "last_folder": self.last_folder,
+        })
+        _write_json(self.path, payload)
+
+    def set_auto_copy(self, enabled: bool) -> None:
+        self.auto_copy = bool(enabled)
+        self.save()
+
+    def set_last_folder(self, folder: str) -> None:
+        self.last_folder = str(folder or "")
+        self.save()
 
     def set_format(self, fmt: str) -> None:
         self.format = fmt if fmt in FORMATS else "hex"
@@ -157,3 +171,23 @@ class ColourHistory:
         if parsed is None:
             return hex_code
         return format_colour(*parsed, self.format)
+
+
+def _read_json(path: Path) -> dict:
+    if not path.is_file():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _write_json(path: Path, payload: dict) -> None:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_suffix(".json.tmp")
+        temporary.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        temporary.replace(path)
+    except OSError:
+        return

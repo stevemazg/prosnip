@@ -136,20 +136,51 @@ def _icon_crop(p, s):
     p.drawRect(int(s * 0.28), int(s * 0.22), int(s * 0.52), int(s * 0.46))
 
 
+def _icon_blur(p, s):
+    p.setPen(QPen(Qt.PenStyle.NoPen))
+    p.setBrush(QBrush(QColor("#9aa0a6")))
+    block = max(4, int(s * 0.22))
+    for row in range(3):
+        for col in range(3):
+            shade = 90 + ((row + col) % 2) * 50
+            p.setBrush(QBrush(QColor(shade, shade, shade)))
+            p.drawRect(int(s * 0.12) + col * block, int(s * 0.12) + row * block, block - 1, block - 1)
+
+
+def _icon_number(p, s):
+    p.setPen(QPen(QColor("#ffffff"), max(1.5, s * 0.05)))
+    p.setBrush(QBrush(QColor("#e63946")))
+    p.drawEllipse(int(s * 0.12), int(s * 0.12), int(s * 0.76), int(s * 0.76))
+    p.setPen(QPen(QColor("#ffffff")))
+    font = QFont("Arial", max(10, int(s * 0.42)), QFont.Weight.Bold)
+    p.setFont(font)
+    p.drawText(0, 0, s, s, int(Qt.AlignmentFlag.AlignCenter), "1")
+
+
+def _icon_eraser(p, s):
+    p.setPen(QPen(QColor("#f2f2f2"), max(1.6, s * 0.05)))
+    p.setBrush(QBrush(QColor("#f4a261")))
+    p.drawRoundedRect(int(s * 0.18), int(s * 0.28), int(s * 0.64), int(s * 0.36), 3, 3)
+    p.drawRect(int(s * 0.18), int(s * 0.48), int(s * 0.64), int(s * 0.16))
+
+
 TOOL_DEFS = [
-    ("select",  "Select",           _icon_select),
-    ("arrow",   "Arrow (A)",        _icon_arrow),
-    ("text",    "Text (T)",         _icon_text),
-    ("pen",     "Pen (P)",          _icon_pen),
+    ("select", "Select (V)", _icon_select),
+    ("arrow", "Arrow (A)", _icon_arrow),
+    ("rect", "Rectangle (R)", _icon_rect),
+    ("ellipse", "Ellipse (E)", _icon_ellipse),
+    ("pen", "Pen (P)", _icon_pen),
     ("highlight", "Highlighter (H)", _icon_highlight),
-    ("callout", "Callout",          _icon_callout),
-    ("stamp",   "Stamp",            _icon_stamp),
-    ("rect",    "Rectangle (R)",    _icon_rect),
-    ("ellipse", "Ellipse (E)",      _icon_ellipse),
-    ("image",   "Image",            _icon_image),
-    ("pick",    "Pick colour from image", _icon_pick),
-    ("screenpick", "Colour Picker (Ctrl+Shift+P)", _icon_dropper),
-    ("crop",    "Crop",             _icon_crop),
+    ("blur", "Blur (B)", _icon_blur),
+    ("number", "Number (N)", _icon_number),
+    ("text", "Text (T)", _icon_text),
+    ("crop", "Crop (C)", _icon_crop),
+    ("eraser", "Eraser", _icon_eraser),
+    ("screenpick", "Colour picker (I)", _icon_dropper),
+    ("callout", "Callout", _icon_callout),
+    ("stamp", "Stamp", _icon_stamp),
+    ("image", "Image", _icon_image),
+    ("pick", "Pick colour from image", _icon_pick),
 ]
 
 
@@ -180,7 +211,8 @@ class ToolBar(QWidget):
         self._history = history if history is not None else ColourHistory()
         self._swatch_buttons = []
         self._build_ui()
-        self.setFixedWidth(104)
+        self.setMinimumWidth(96)
+        self._controls = []
         self.setStyleSheet(with_tooltip_style("""
             QWidget { background-color: #1e1e1e; }
             QPushButton {

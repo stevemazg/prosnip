@@ -11,6 +11,7 @@ from PyQt6.QtCore import Qt, QRectF, QPointF, QEvent, pyqtSignal
 from items import (
     ArrowItem, TextItem, CalloutItem, StampItem,
     RectItem, EllipseItem, ImageOverlayItem, StrokeItem,
+    BlurItem, NumberItem,
     item_is_text_editing,
 )
 from stamp_picker import StampPickerDialog
@@ -40,7 +41,11 @@ class ProSnipScene(QGraphicsScene):
         self._font_size = DEFAULT_STYLE.font_size
         self.arrow_style = "plain"
         self.item_opacity = 1.0
+        self.corner_radius = 0
         self._image_rect_item = None
+        self._next_number = 1
+        self._clipboard = []
+        self._eraser_item = None
 
     def set_tool(self, tool: str):
         self._tool = tool
@@ -117,16 +122,76 @@ class ProSnipScene(QGraphicsScene):
         self.tool_used.emit(item)
 
     def undo(self):
-        if self._undo_stack:
-            item = self._undo_stack.pop()
-            self.removeItem(item)
-            self._redo_stack.append(item)
+        if not self._undo_stack:
+            return
+        entry = self._undo_stack.pop()
+        if hasattr(entry, "undo"):
+            entry.undo(self)
+        else:
+            self.removeItem(entry)
+        self._redo_stack.append(entry)
 
     def redo(self):
-        if self._redo_stack:
-            item = self._redo_stack.pop()
-            self.addItem(item)
-            self._undo_stack.append(item)
+        if not self._redo_stack:
+            return
+        entry = self._redo_stack.pop()
+        if hasattr(entry, "redo"):
+            entry.redo(self)
+        else:
+            self.addItem(entry)
+        self._undo_stack.append(entry)
+
+    def copy_selected(self):
+        self._clipboard = [item for item in self.selectedItems() if item.parentItem() is None]
+
+    def paste_clipboard(self):
+        clones = []
+        for item in self._clipboard:
+            clone = _clone_item(item)
+            if clone is None:
+                continue
+            clone.moveBy(16, 16)
+            self.addItem(clone)
+            clones.append(clone)
+        if clones:
+            self.clearSelection()
+            for clone in clones:
+                clone.setSelected(True)
+            self._undo_stack.append(_AddCommand(clones))
+            self._redo_stack.clear()
+
+    def duplicate_selected(self):
+        self.copy_selected()
+        self.paste_clipboard()
+
+    def bring_forward(self):
+        selected = [item for item in self.selectedItems() if item.parentItem() is None]
+        top = max((item.zValue() for item in self.items()), default=0)
+        for item in selected:
+            top += 1
+            item.setZValue(top)
+
+    def send_back(self):
+        selected = [item for item in self.selectedItems() if item.parentItem() is None]
+        floor = min((item.zValue() for item in self.items() if item.zValue() > -50), default=0)
+        for item in selected:
+            floor -= 1
+            item.setZValue(floor)
+
+    def align_left(self):
+        selected = [item for item in self.selectedItems() if item.parentItem() is None]
+        if len(selected) < 2:
+            return
+        edge = min(item.sceneBoundingRect().left() for item in selected)
+        for item in selected[1:]:
+            rect = item.sceneBoundingRect()
+            item.moveBy(edge - rect.left(), 0)
+
+    def toggle_lock(self):
+        for item in self.selectedItems():
+            locked = not getattr(item, "locked", False)
+            item.locked = locked
+            item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, not locked)
 
     def delete_selected(self):
         for item in self.selectedItems():
@@ -213,8 +278,29 @@ class ProSnipScene(QGraphicsScene):
 
         elif tool == "rect":
             item = RectItem(QRectF(pos, pos), self._pen_color, self._fill_color, self._line_width)
+            item.corner_radius = self.corner_radius
             self.addItem(item)
             self._current_item = item
+            event.accept()
+
+        elif tool == "blur":
+            item = BlurItem(QRectF(pos, pos))
+            self.addItem(item)
+            self._current_item = item
+            event.accept()
+
+        elif tool == "number":
+            item = NumberItem(self._next_number, pos, self._pen_color)
+            self._next_number += 1
+            self.addItem(item)
+            self._push_undo(item)
+            self._current_item = None
+            event.accept()
+
+        elif tool == "eraser":
+            self._eraser_item = StrokeItem(QColor(255, 255, 255, 90), max(16, self._line_width))
+            self.addItem(self._eraser_item)
+            self._eraser_item.add_point(pos)
             event.accept()
 
         elif tool == "ellipse":
@@ -257,13 +343,20 @@ class ProSnipScene(QGraphicsScene):
                 item._update_handles()
                 item.update()
 
-            elif tool in ("rect", "ellipse"):
+            elif tool in ("rect", "ellipse", "blur"):
                 item = self._current_item
                 r = QRectF(self._press_pos, pos).normalized()
                 item.prepareGeometryChange()
-                item._set_rect(r)
-                item._update_handles()
+                if hasattr(item, "_set_rect"):
+                    item._set_rect(r)
+                    item._update_handles()
+                else:
+                    item.setRect(r)
                 item.update()
+
+            elif tool == "eraser" and self._eraser_item is not None:
+                self._eraser_item.add_point(pos)
+                return
 
             elif tool in ("pen", "highlight"):
                 self._current_item.add_point(pos)
@@ -301,6 +394,25 @@ class ProSnipScene(QGraphicsScene):
             self._current_item = None
             if tool not in ("pen", "highlight"):
                 self._tool = "select"
+            return
+
+        if tool == "eraser" and self._eraser_item is not None:
+            stroke = self._eraser_item
+            self._eraser_item = None
+            victims = []
+            for item in list(self.items()):
+                if item is stroke or item.parentItem() is not None:
+                    continue
+                if isinstance(item, QGraphicsPixmapItem) and item.zValue() < 0:
+                    continue
+                if stroke.collidesWithItem(item):
+                    victims.append(item)
+            self.removeItem(stroke)
+            for item in victims:
+                self.removeItem(item)
+            if victims:
+                self._undo_stack.append(_RemoveCommand(victims))
+                self._redo_stack.clear()
             return
 
         elif tool == "crop" and self._crop_rect_item is not None:
@@ -349,6 +461,7 @@ class ProSnipView(QGraphicsView):
     def __init__(self, scene: ProSnipScene, parent=None):
         super().__init__(scene, parent)
         self.setViewport(_CanvasViewport(self))
+        self.setViewportUpdateMode(QGraphicsView.ViewportUpdateMode.FullViewportUpdate)
         self.setRenderHint(QPainter.RenderHint.Antialiasing)
         self.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
         self.setDragMode(QGraphicsView.DragMode.NoDrag)
@@ -395,7 +508,51 @@ class ProSnipView(QGraphicsView):
         ):
             scene.redo()
             return
+        if event.key() == Qt.Key.Key_Space and not editing:
+            self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
+            return
+        if (
+            not editing
+            and event.modifiers() == Qt.KeyboardModifier.ControlModifier
+            and event.key() == Qt.Key.Key_0
+        ):
+            self.fit_scene()
+            return
+        if (
+            not editing
+            and event.modifiers() == Qt.KeyboardModifier.ControlModifier
+            and event.key() == Qt.Key.Key_1
+        ):
+            self.resetTransform()
+            return
         super().keyPressEvent(event)
+
+    def keyReleaseEvent(self, event: QKeyEvent):
+        if event.key() == Qt.Key.Key_Space:
+            self.setDragMode(QGraphicsView.DragMode.NoDrag)
+            return
+        super().keyReleaseEvent(event)
+
+    def wheelEvent(self, event):
+        if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            factor = 1.15 if event.angleDelta().y() > 0 else 1 / 1.15
+            self.scale(factor, factor)
+            event.accept()
+            return
+        super().wheelEvent(event)
+
+    def fit_scene(self):
+        scene = self.scene()
+        if scene is not None:
+            self.fitInView(scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
+
+    def set_select_drag(self, enabled: bool):
+        mode = (
+            QGraphicsView.DragMode.RubberBandDrag
+            if enabled
+            else QGraphicsView.DragMode.NoDrag
+        )
+        self.setDragMode(mode)
 
 
 def _svg_pixmap(path: str, width: int, height: int) -> QPixmap:
@@ -414,6 +571,62 @@ def _svg_pixmap(path: str, width: int, height: int) -> QPixmap:
     return pixmap
 
 
+class _AddCommand:
+    def __init__(self, items):
+        self.items = list(items)
+
+    def undo(self, scene):
+        for item in self.items:
+            scene.removeItem(item)
+
+    def redo(self, scene):
+        for item in self.items:
+            scene.addItem(item)
+
+
+class _RemoveCommand:
+    def __init__(self, items):
+        self.items = list(items)
+
+    def undo(self, scene):
+        for item in self.items:
+            scene.addItem(item)
+
+    def redo(self, scene):
+        for item in self.items:
+            scene.removeItem(item)
+
+
+def _clone_item(item):
+    clone = None
+    if isinstance(item, RectItem):
+        clone = RectItem(QRectF(item.rect()), item.pen_color, item.fill_color, item.line_width)
+        clone.corner_radius = item.corner_radius
+    elif isinstance(item, EllipseItem):
+        clone = EllipseItem(QRectF(item.rect()), item.pen_color, item.fill_color, item.line_width)
+    elif isinstance(item, TextItem):
+        clone = TextItem(item.toPlainText(), item.pos(), item.defaultTextColor(), item.font().pointSize() or 14)
+        clone.bg_color = QColor(item.bg_color)
+        clone.set_bold(item.font().bold())
+    elif isinstance(item, NumberItem):
+        clone = NumberItem(item.number, item.pos(), item.color)
+    elif isinstance(item, BlurItem):
+        clone = BlurItem(QRectF(item.rect()), item.block)
+    elif isinstance(item, ArrowItem):
+        clone = ArrowItem(QPointF(item.start), QPointF(item.end), item.pen_color, item.line_width, item.style)
+    elif isinstance(item, StrokeItem):
+        clone = StrokeItem(QColor(item.pen_color), item.line_width, item.highlighter)
+        for point in item._points:
+            clone.add_point(QPointF(point))
+    if clone is None:
+        return None
+    if not isinstance(item, (TextItem, NumberItem)):
+        clone.setPos(item.pos())
+    clone.setRotation(item.rotation())
+    clone.setZValue(item.zValue())
+    return clone
+
+
 def _text_keeps_key(event) -> bool:
     """Keys the text editor must receive instead of a window shortcut."""
     key = event.key()
@@ -427,6 +640,12 @@ def _text_keeps_key(event) -> bool:
         Qt.Key.Key_H,
         Qt.Key.Key_R,
         Qt.Key.Key_E,
+        Qt.Key.Key_V,
+        Qt.Key.Key_B,
+        Qt.Key.Key_N,
+        Qt.Key.Key_C,
+        Qt.Key.Key_I,
+        Qt.Key.Key_X,
     ):
         return True
     if mods == Qt.KeyboardModifier.ControlModifier and key in (

@@ -34,7 +34,7 @@ jobs:
           .venv\Scripts\python.exe -m pip install --upgrade pip
           .venv\Scripts\python.exe -m pip install -r requirements.txt
           $env:Path = "$PWD\.venv\Scripts;$env:Path"
-          pyinstaller --noconfirm --clean --onedir --windowed --noupx --name ProSnip-Bob --exclude-module tkinter --collect-data imageio_ffmpeg --version-file version_info.txt src/main.py
+          pyinstaller --noconfirm --clean --onedir --windowed --noupx --name ProSnip-Bob --exclude-module tkinter --version-file version_info.txt src/main.py
 
       - name: Capture windows from the built executable
         run: |
@@ -55,8 +55,6 @@ jobs:
             "01-main-window.png",
             "02-editor.png",
             "03-colour-dropdown.png",
-            "04-record-picker.png",
-            "05-rec-control.png",
             "06-arrow-presets.png",
             "07-properties.png",
             "08-stamp-picker.png",
@@ -64,7 +62,11 @@ jobs:
             "10-image-placeholder.png",
             "11-toolbar-tooltip.png",
             "12-toolbar.png",
-            "13-picker-loupe.png"
+            "13-picker-loupe.png",
+            "14-editor-small.png",
+            "15-colour-card.png",
+            "16-swatches.png",
+            "17-no-trails.png"
           )) {
             $file = Join-Path screenshots $name
             if (-not (Test-Path $file)) { throw "Missing $name" }

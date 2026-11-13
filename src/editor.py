@@ -2,25 +2,31 @@ from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
     QToolBar, QPushButton, QFileDialog, QDialog,
     QFormLayout, QSpinBox, QCheckBox, QDialogButtonBox,
-    QGraphicsPixmapItem, QApplication, QLabel, QScrollArea
+    QGraphicsPixmapItem, QApplication, QLabel, QScrollArea,
+    QDockWidget,
 )
-from PyQt6.QtCore import Qt, QRectF, QEvent, QRect
+from PyQt6.QtCore import Qt, QRectF, QEvent, QRect, pyqtSignal
 from PyQt6.QtGui import (
     QPixmap, QImage, QPainter, QColor, QKeySequence,
-    QShortcut, QKeyEvent
+    QShortcut, QKeyEvent, QGuiApplication,
 )
 
 from canvas import ProSnipScene, ProSnipView
+from colour import ColourHistory
+from layout import fit_editor_frame
 from properties import PropertiesPanel
+from swatches import SwatchBook, SwatchPanel
 from toolbar import ToolBar
 from styles import QuickStyle, with_tooltip_style
 
 import io
 import math
-from PIL import Image
+from datetime import datetime
+from pathlib import Path
+from PIL import Image, ImageOps
 
 APP_NAME = "ProSnip-Bob"
-APP_VERSION = "1.4.0.0"
+APP_VERSION = "1.5.0.0"
 
 
 def clamp_crop_rect(rect: QRectF, width: int, height: int) -> QRect | None:
@@ -123,6 +129,8 @@ class ResizeDialog(QDialog):
 
 
 class EditorWindow(QMainWindow):
+    screen_pick_requested = pyqtSignal()
+
     def __init__(self, pil_image: Image.Image, parent=None):
         super().__init__(parent)
         self._pil_image = pil_image
@@ -137,10 +145,13 @@ class EditorWindow(QMainWindow):
         self._view = ProSnipView(self._scene)
         self._toolbar = ToolBar()
 
+        self._history = ColourHistory()
+        self._swatches = SwatchBook(self._history.path)
         self._setup_background()
         self._setup_ui()
         self._connect_signals()
         self._setup_shortcuts()
+        self.fit_to_screen()
 
     def _setup_background(self):
         pixmap = pil_to_qpixmap(self._pil_image)
@@ -150,8 +161,22 @@ class EditorWindow(QMainWindow):
         self._scene.addItem(self._bg_item)
         self._scene.setSceneRect(QRectF(pixmap.rect()))
 
+    def fit_to_screen(self):
+        screen = self.screen() or QGuiApplication.primaryScreen()
+        if screen is None:
+            self.resize(960, 640)
+            return
+        frame = fit_editor_frame(
+            self._pil_image.width,
+            self._pil_image.height,
+            280,
+            150,
+            screen.availableGeometry(),
+            screen.devicePixelRatio() or 1.0,
+        )
+        self.setGeometry(*frame)
+
     def _setup_ui(self):
-        # Top action toolbar
         top_bar = QToolBar("Actions")
         top_bar.setMovable(False)
         top_bar.setStyleSheet(with_tooltip_style("""
@@ -173,29 +198,61 @@ class EditorWindow(QMainWindow):
 
         self._btn_save_png = _tb_btn("Save PNG", "Save PNG (Ctrl+S)")
         self._btn_save_jpg = _tb_btn("Save JPG", "Save JPG")
-        self._btn_copy = _tb_btn("Copy", "Copy (Ctrl+Shift+C)")
+        self._btn_copy = _tb_btn("Copy", "Copy (Ctrl+C)")
         self._btn_resize = _tb_btn("Resize…", "Resize canvas")
-
-        for btn in [self._btn_save_png, self._btn_save_jpg, self._btn_copy, self._btn_resize]:
+        self._btn_rotate = _tb_btn("Rotate", "Rotate image 90°")
+        self._btn_flip = _tb_btn("Flip", "Flip image horizontally")
+        self._btn_border = _tb_btn("Border", "Add a border")
+        self._btn_forward = _tb_btn("Forward", "Bring forward")
+        self._btn_back = _tb_btn("Back", "Send back")
+        self._btn_lock = _tb_btn("Lock", "Lock or unlock the selection")
+        for btn in (
+            self._btn_save_png, self._btn_save_jpg, self._btn_copy, self._btn_resize,
+            self._btn_rotate, self._btn_flip, self._btn_border,
+            self._btn_forward, self._btn_back, self._btn_lock,
+        ):
             top_bar.addWidget(btn)
 
-        # Central layout
+        tool_scroll = QScrollArea()
+        tool_scroll.setWidget(self._toolbar)
+        tool_scroll.setWidgetResizable(True)
+        tool_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        tool_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        tool_scroll.setMinimumHeight(72)
+        tool_scroll.setMaximumHeight(240)
+        self._toolbar.setMinimumHeight(self._toolbar.sizeHint().height())
+
         central = QWidget()
         self.setCentralWidget(central)
-        hlayout = QHBoxLayout(central)
-        hlayout.setContentsMargins(0, 0, 0, 0)
-        hlayout.setSpacing(0)
-        scroller = QScrollArea()
-        scroller.setWidget(self._toolbar)
-        scroller.setWidgetResizable(True)
-        scroller.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        scroller.setFrameShape(QScrollArea.Shape.NoFrame)
-        scroller.setFixedWidth(self._toolbar.width() + 2)
+        layout = QVBoxLayout(central)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        layout.addWidget(tool_scroll)
+        layout.addWidget(self._view, 1)
+
         self._properties = PropertiesPanel()
         self._properties.bind(self._scene, self._toolbar)
-        hlayout.addWidget(scroller)
-        hlayout.addWidget(self._view, 1)
-        hlayout.addWidget(self._properties)
+        self._swatch_panel = SwatchPanel(self._swatches, self._apply_swatch)
+        self._properties_dock = self._dock("Properties", self._properties)
+        self._swatch_dock = self._dock("Swatches", self._swatch_panel)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self._properties_dock)
+        self.splitDockWidget(self._properties_dock, self._swatch_dock, Qt.Orientation.Vertical)
+
+    def _dock(self, title: str, widget: QWidget) -> QDockWidget:
+        dock = QDockWidget(title, self)
+        dock.setWidget(widget)
+        dock.setAllowedAreas(Qt.DockWidgetArea.RightDockWidgetArea | Qt.DockWidgetArea.LeftDockWidgetArea)
+        dock.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetClosable)
+        dock.setFloating(False)
+        return dock
+
+    def _apply_swatch(self, hex_code: str):
+        colour = QColor(hex_code)
+        self._toolbar.set_pen_colour(colour)
+        self._scene.set_pen_color(colour)
+        clipboard = QApplication.clipboard()
+        if clipboard is not None:
+            clipboard.setText(self._history.display(hex_code))
 
     def _connect_signals(self):
         self._toolbar.tool_changed.connect(self._on_tool_changed)
@@ -213,18 +270,39 @@ class EditorWindow(QMainWindow):
         self._btn_save_jpg.clicked.connect(self._save_jpg)
         self._btn_copy.clicked.connect(self._copy_clipboard)
         self._btn_resize.clicked.connect(self._resize_image)
+        self._btn_rotate.clicked.connect(self._rotate_image)
+        self._btn_flip.clicked.connect(self._flip_image)
+        self._btn_border.clicked.connect(self._add_border)
+        self._btn_forward.clicked.connect(self._scene.bring_forward)
+        self._btn_back.clicked.connect(self._scene.send_back)
+        self._btn_lock.clicked.connect(self._scene.toggle_lock)
+        self._toolbar.screen_pick_requested.connect(self.screen_pick_requested.emit)
 
     def _setup_shortcuts(self):
         QShortcut(QKeySequence("Ctrl+S"), self).activated.connect(self._save_png)
+        QShortcut(QKeySequence("Ctrl+C"), self).activated.connect(self._copy_clipboard)
         QShortcut(QKeySequence("Ctrl+Shift+C"), self).activated.connect(self._copy_clipboard)
+        QShortcut(QKeySequence("Ctrl+V"), self).activated.connect(self._scene.paste_clipboard)
+        QShortcut(QKeySequence("Ctrl+D"), self).activated.connect(self._scene.duplicate_selected)
         QShortcut(QKeySequence("Ctrl+Z"), self).activated.connect(self._scene.undo)
         QShortcut(QKeySequence("Ctrl+Y"), self).activated.connect(self._scene.redo)
-        QShortcut(QKeySequence("A"), self).activated.connect(lambda: self._select_tool("arrow"))
-        QShortcut(QKeySequence("T"), self).activated.connect(lambda: self._select_tool("text"))
-        QShortcut(QKeySequence("P"), self).activated.connect(lambda: self._select_tool("pen"))
-        QShortcut(QKeySequence("H"), self).activated.connect(lambda: self._select_tool("highlight"))
-        QShortcut(QKeySequence("R"), self).activated.connect(lambda: self._select_tool("rect"))
-        QShortcut(QKeySequence("E"), self).activated.connect(lambda: self._select_tool("ellipse"))
+        QShortcut(QKeySequence("Ctrl+0"), self).activated.connect(self._view.fit_scene)
+        QShortcut(QKeySequence("Ctrl+1"), self).activated.connect(self._view.resetTransform)
+        for key, tool in (
+            ("V", "select"),
+            ("A", "arrow"),
+            ("T", "text"),
+            ("P", "pen"),
+            ("H", "highlight"),
+            ("R", "rect"),
+            ("E", "ellipse"),
+            ("B", "blur"),
+            ("N", "number"),
+            ("C", "crop"),
+            ("I", "screenpick"),
+            ("X", "eraser"),
+        ):
+            QShortcut(QKeySequence(key), self).activated.connect(lambda tool=tool: self._select_tool(tool))
         QShortcut(QKeySequence(Qt.Key.Key_Delete), self).activated.connect(self._on_delete_shortcut)
         QShortcut(QKeySequence("Escape"), self).activated.connect(
             lambda: self._on_tool_changed("select")
@@ -254,7 +332,11 @@ class EditorWindow(QMainWindow):
     def _select_tool(self, tool: str):
         if self._view.is_text_editing():
             return
+        if tool == "screenpick":
+            self.screen_pick_requested.emit()
+            return
         self._on_tool_changed(tool)
+        self._view.set_select_drag(tool == "select")
 
     def _on_tool_changed(self, tool: str):
         self._scene.set_tool(tool)
@@ -278,31 +360,75 @@ class EditorWindow(QMainWindow):
         painter.end()
         return img
 
+    def _default_save_path(self, suffix: str) -> str:
+        folder = self._history.last_folder or str(Path.home() / "Pictures")
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        return str(Path(folder) / f"ProSnip-Bob_{stamp}{suffix}")
+
+    def _remember_save(self, path: str) -> None:
+        self._filename = path
+        self._history.set_last_folder(str(Path(path).parent))
+        self.setWindowTitle(f"{APP_NAME} — {path}")
+
     def _save_png(self):
         path, _ = QFileDialog.getSaveFileName(
-            self, "Save as PNG", self._filename or "screenshot.png",
+            self, "Save as PNG", self._filename or self._default_save_path(".png"),
             "PNG Images (*.png)"
         )
         if path:
             img = self._render_scene()
             img.save(path, "PNG")
-            self._filename = path
-            self.setWindowTitle(f"{APP_NAME} — {path}")
+            self._remember_save(path)
 
     def _save_jpg(self):
         path, _ = QFileDialog.getSaveFileName(
-            self, "Save as JPG", self._filename or "screenshot.jpg",
+            self, "Save as JPG", self._filename or self._default_save_path(".jpg"),
             "JPEG Images (*.jpg *.jpeg)"
         )
         if path:
             img = self._render_scene()
             img.save(path, "JPEG", 95)
-            self._filename = path
-            self.setWindowTitle(f"{APP_NAME} — {path}")
+            self._remember_save(path)
 
     def _copy_clipboard(self):
+        selected = [item for item in self._scene.selectedItems() if item.parentItem() is None]
+        if selected:
+            self._scene.copy_selected()
+            return
         img = self._render_scene()
-        QApplication.clipboard().setImage(img)
+        clipboard = QApplication.clipboard()
+        if clipboard is not None:
+            clipboard.setImage(img)
+
+    def _replace_pixmap(self, pixmap: QPixmap, image: Image.Image) -> None:
+        pixmap.setDevicePixelRatio(1.0)
+        self._bg_item.setPixmap(pixmap)
+        self._bg_item.setPos(0, 0)
+        self._scene.setSceneRect(QRectF(pixmap.rect()))
+        self._pil_image = image
+        self._scene.update()
+
+    def _rotate_image(self):
+        if self._bg_item is None:
+            return
+        turned = self._pil_image.transpose(Image.Transpose.ROTATE_90)
+        self._replace_pixmap(pil_to_qpixmap(turned), turned)
+
+    def _flip_image(self):
+        if self._bg_item is None:
+            return
+        flipped = ImageOps.mirror(self._pil_image)
+        self._replace_pixmap(pil_to_qpixmap(flipped), flipped)
+
+    def _add_border(self):
+        if self._bg_item is None:
+            return
+        bordered = ImageOps.expand(self._pil_image.convert("RGBA"), border=12, fill=(255, 255, 255, 255))
+        shadowed = Image.new("RGBA", (bordered.width + 16, bordered.height + 16), (0, 0, 0, 0))
+        shade = Image.new("RGBA", bordered.size, (0, 0, 0, 90))
+        shadowed.paste(shade, (10, 10), shade)
+        shadowed.paste(bordered, (0, 0), bordered)
+        self._replace_pixmap(pil_to_qpixmap(shadowed.convert("RGB")), shadowed.convert("RGB"))
 
     def _resize_image(self):
         if self._bg_item is None:

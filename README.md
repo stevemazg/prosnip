@@ -31,13 +31,9 @@ Press **Ctrl+Shift+S** (a normal Windows hotkey, including while the window is h
 
 A second capture request is ignored while one is already open or waiting to open. Each successful snip opens its own editor window, so earlier snips stay open.
 
-## Recording
+## Drawing
 
-**Record**, next to New Capture and in the tray menu, records a whole monitor, a dragged region, or one application window. There is no sound. A browser tab cannot be recorded on its own; choose the browser window. The recording follows that window's area on the screen, so if another window covers it, the covering window is what is recorded.
-
-A small **REC** control stays on top while recording (elapsed time, Pause/Resume, Stop). It is excluded from the video where Windows allows that. The tray tooltip says "recording", and **Stop recording** appears in the tray menu. Frames are streamed to a bundled ffmpeg encoder (H.264 MP4, 15–30 frames per second), so a long recording does not keep every frame in memory.
-
-Files are saved as `Videos\ProSnip-Bob\ProSnip-Bob_YYYYMMDD_HHMMSS.mp4`. ProSnip-Bob then opens that folder and shows the path in the tray. The build bundles ffmpeg (`imageio-ffmpeg`) so the folder build can encode H.264 without a separate install.
+Screen recording is not in this version. The drawing tools are in the editor after a capture: select, arrow, rectangle, ellipse, pen, highlighter, blur, numbered steps, text, crop, and the colour picker.
 
 ## Annotation Tools
 
@@ -99,12 +95,12 @@ build.bat
 That runs:
 
 ```bat
-pyinstaller --noconfirm --clean --onedir --windowed --noupx --name ProSnip-Bob --exclude-module tkinter --collect-data imageio_ffmpeg --version-file version_info.txt src/main.py
+pyinstaller --noconfirm --clean --onedir --windowed --noupx --name ProSnip-Bob --exclude-module tkinter --version-file version_info.txt src/main.py
 ```
 
-Output: `dist/ProSnip-Bob/`, containing `ProSnip-Bob.exe` and `_internal`. Run `ProSnip-Bob.exe` from that folder. The executable needs `_internal` beside it. Version information in the executable names the product ProSnip-Bob, version 1.4.0.0. UPX is not used.
+Output: `dist/ProSnip-Bob/`, containing `ProSnip-Bob.exe` and `_internal`. Run `ProSnip-Bob.exe` from that folder. The executable needs `_internal` beside it. Version information in the executable names the product ProSnip-Bob, version 1.5.0.0. UPX is not used.
 
-GitHub Actions (`.github/workflows/build-windows.yml`) builds the same executable on `windows-latest` when `prosnip-bob` is pushed, and when the workflow is run by hand. It reads `APP_VERSION` from `src/editor.py`, checks that it matches the FileVersion and ProductVersion embedded in the executable, then publishes the folder and the zip as `ProSnip-Bob-<version>-win64` (for example `ProSnip-Bob-1.4.0.0-win64`). The executable inside that folder is still `ProSnip-Bob.exe`.
+GitHub Actions (`.github/workflows/build-windows.yml`) builds the same executable on `windows-latest` when `prosnip-bob` is pushed, and when the workflow is run by hand. It reads `APP_VERSION` from `src/editor.py`, checks that it matches the FileVersion and ProductVersion embedded in the executable, then publishes the folder and the zip as `ProSnip-Bob-<version>-win64` (for example `ProSnip-Bob-1.5.0.0-win64`). The executable inside that folder is still `ProSnip-Bob.exe`.
 
 ProSnip-Bob is not code-signed. Windows SmartScreen may warn the first time you run it. If you trust the build, choose More info and then Run anyway. Antivirus software may also warn about a new unsigned application. The build does not use a packer, and it does not install a low-level keyboard hook.
 
@@ -117,8 +113,8 @@ ProSnip-Bob/
 │   ├── main_window.py   # Window shown at startup
 │   ├── instance.py      # Single-instance activation
 │   ├── hotkey.py        # Ctrl+Shift+S via RegisterHotKey
-│   ├── recorder.py      # Screen recording and REC control
-│   ├── window_list.py   # Visible windows for recording |
+│   ├── colour_picker.py # Screen colour picker
+│   ├── swatches.py      # Saved colour swatches
 │   ├── capture.py       # Per-monitor capture overlay
 │   ├── editor.py        # Main editor window
 │   ├── canvas.py        # QGraphicsScene + QGraphicsView

@@ -37,9 +37,7 @@ import instance
 import items
 import main
 import main_window
-import recorder
 import toolbar
-import window_list
 
 
 def setUpModule():
@@ -351,7 +349,7 @@ class LauncherTests(unittest.TestCase):
         labels = [label.text() for label in window.findChildren(main_window.QLabel)]
         self.assertIn("ProSnip-Bob", labels)
         self.assertIn(f"Version {editor.APP_VERSION}", labels)
-        self.assertEqual(editor.APP_VERSION, "1.4.0.0")
+        self.assertEqual(editor.APP_VERSION, "1.5.0.0")
         self.assertEqual(window.new_capture_button.text(), "New Capture")
         self.assertEqual(window.quit_button.text(), "Quit")
         self.assertIn("this system", window.shortcut_label.text())
@@ -418,13 +416,19 @@ class LauncherTests(unittest.TestCase):
 
     def test_second_claim_notifies_the_first(self):
         calls = []
-        first_primary, first_server = instance.claim_primary(lambda: calls.append("show"))
+        first_primary, first_server, first_peer = instance.claim_primary(
+            lambda: calls.append("show"), version="1.5.0.0",
+        )
         self.addCleanup(instance.release_server, first_server)
         self.assertTrue(first_primary)
-        second_primary, second_server = instance.claim_primary(lambda: calls.append("other"))
-        QTest.qWait(100)
+        self.assertIsNone(first_peer)
+        second_primary, second_server, second_peer = instance.claim_primary(
+            lambda: calls.append("other"), version="1.5.0.0",
+        )
+        QTest.qWait(200)
         self.assertFalse(second_primary)
         self.assertIsNone(second_server)
+        self.assertIsNone(second_peer)
         self.assertEqual(calls, ["show"])
 
 
@@ -500,7 +504,7 @@ class AppTests(unittest.TestCase):
         window = editor.EditorWindow(Image.new("RGB", (10, 10), "white"))
         self.addCleanup(window.close)
         self.assertEqual(window.windowTitle(), "ProSnip-Bob — Untitled")
-        self.assertEqual(window._btn_copy.toolTip(), "Copy (Ctrl+Shift+C)")
+        self.assertEqual(window._btn_copy.toolTip(), "Copy (Ctrl+C)")
         self.assertEqual(window._btn_save_png.toolTip(), "Save PNG (Ctrl+S)")
         self.assertEqual(window._btn_copy.text(), "Copy")
 
@@ -604,7 +608,7 @@ class AppTests(unittest.TestCase):
         command = (
             "pyinstaller --noconfirm --clean --onedir --windowed --noupx "
             "--name ProSnip-Bob --exclude-module tkinter "
-            "--collect-data imageio_ffmpeg --version-file version_info.txt src/main.py"
+            "--version-file version_info.txt src/main.py"
         )
         self.assertIn(command, build)
         self.assertIn(command, workflow)
@@ -620,13 +624,15 @@ class AppTests(unittest.TestCase):
         self.assertIn("prosnip-bob", workflow)
         self.assertIn("python-version: \"3.12\"", workflow)
         self.assertIn("QT_QPA_PLATFORM: offscreen", workflow)
-        self.assertIn("recorder, main", workflow)
+        self.assertIn("colour_picker, main", workflow)
+        self.assertNotIn("imageio_ffmpeg", workflow)
+        self.assertNotIn("recorder", workflow)
         for text in (
             "Steve Maz",
             "ProSnip-Bob",
             "ProSnip-Bob screen capture and annotation tool",
-            "1.4.0.0",
-            "(1, 4, 0, 0)",
+            "1.5.0.0",
+            "(1, 5, 0, 0)",
             "ProSnip-Bob.exe",
             "Copyright (C) 2026 Steve Maz",
         ):
@@ -842,27 +848,92 @@ class DemoFlagTests(unittest.TestCase):
         )
 
 
-class RecordingTests(unittest.TestCase):
-    def test_helpers(self):
-        self.assertEqual(recorder.even_size(101, 51), (100, 50))
-        self.assertEqual(recorder.even_size(1, 1), (2, 2))
-        path = recorder.video_output_path(datetime(2026, 11, 9, 11, 17, 5))
-        self.assertEqual(path.name, "ProSnip-Bob_20261109_111705.mp4")
-        self.assertEqual(path.parent.name, "ProSnip-Bob")
-        self.assertEqual(path.parent.parent.name, "Videos")
-        self.assertEqual(window_list.list_toplevel_windows(), [] if sys.platform != "win32" else window_list.list_toplevel_windows())
-        self.assertFalse(recorder.exclude_from_capture(QWidget()))
-        self.assertEqual(recorder.WDA_EXCLUDEFROMCAPTURE, 0x11)
+class EditorLayoutTests(unittest.TestCase):
+    def test_frame_fits_a_small_snip_and_clamps_a_large_one(self):
+        from layout import fit_editor_frame
 
-    def test_frame_queue_stays_bounded(self):
-        frames = queue.Queue(maxsize=recorder.QUEUE_LIMIT)
-        for index in range(6):
-            recorder.enqueue_frame(frames, bytes([index]))
-        self.assertLessEqual(frames.qsize(), recorder.QUEUE_LIMIT)
-        kept = []
-        while not frames.empty():
-            kept.append(frames.get_nowait()[0])
-        self.assertEqual(kept, [4, 5])
+        class Area:
+            def __init__(self, x, y, width, height):
+                self._x, self._y, self._w, self._h = x, y, width, height
+
+            def x(self):
+                return self._x
+
+            def y(self):
+                return self._y
+
+            def width(self):
+                return self._w
+
+            def height(self):
+                return self._h
+
+        monitor = Area(0, 0, 1280, 800)
+        small = fit_editor_frame(400, 300, 280, 150, monitor, 1)
+        self.assertEqual((small[2], small[3]), (680, 450))
+        huge = fit_editor_frame(4000, 3000, 280, 150, monitor, 1)
+        self.assertEqual((huge[2], huge[3]), (1280, 800))
+        left = Area(-1920, 0, 1920, 1080)
+        placed = fit_editor_frame(800, 600, 100, 100, left, 1.5)
+        self.assertGreaterEqual(placed[0], -1920)
+        self.assertLessEqual(placed[0] + placed[2], 0)
+        self.assertEqual(fit_editor_frame(1500, 900, 0, 0, monitor, 1.5)[2], 1000)
+        self.assertEqual(fit_editor_frame(1000, 500, 0, 0, monitor, 1.25)[2], 800)
+
+    def test_pen_width_is_inside_the_bounding_rect(self):
+        rect = items.RectItem(QRectF(10, 10, 80, 40), QColor("#e63946"), QColor(0, 0, 0, 0), 16)
+        bounds = rect.boundingRect()
+        self.assertLessEqual(bounds.left(), 10 - 8)
+        self.assertGreaterEqual(bounds.right(), 90 + 8)
+        callout = items.CalloutItem(
+            QPointF(0, 0), QColor("#111111"), QColor("#ffffff"), QColor("#111111"), 12, 14,
+        )
+        self.assertGreater(callout.boundingRect().bottom(), callout._rect.bottom() + 12)
+
+    def test_undo_command_removes_and_restores(self):
+        scene = canvas.ProSnipScene()
+        scene.set_tool("number")
+
+        class _Event:
+            def __init__(self, x, y):
+                self._pos = QPointF(x, y)
+
+            def button(self):
+                return Qt.MouseButton.LeftButton
+
+            def scenePos(self):
+                return self._pos
+
+            def accept(self):
+                return None
+
+        scene.mousePressEvent(_Event(20, 20))
+        self.assertEqual(len([item for item in scene.items() if isinstance(item, items.NumberItem)]), 1)
+        scene.undo()
+        self.assertEqual([item for item in scene.items() if isinstance(item, items.NumberItem)], [])
+        scene.redo()
+        self.assertEqual(len([item for item in scene.items() if isinstance(item, items.NumberItem)]), 1)
+
+    def test_swatches_are_separate_from_recent_picks(self):
+        import tempfile
+        from colour import ColourHistory
+        from swatches import SwatchBook
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "settings.json"
+            book = SwatchBook(path)
+            book.add("#1a2b3c", "Ink")
+            self.assertEqual(len(book.items), 1)
+            book.rename(0, "Navy")
+            self.assertEqual(SwatchBook(path).items[0]["name"], "Navy")
+            export = Path(tmp) / "out.json"
+            book.export_path(export)
+            book.clear()
+            self.assertEqual(SwatchBook(path).items, [])
+            fresh = SwatchBook(path)
+            self.assertEqual(fresh.import_path(export), 1)
+            ColourHistory(path).add_rgb(1, 2, 3)
+            self.assertEqual(SwatchBook(path).items[0]["hex"], "#1A2B3C")
 
 
 class ColourFormatTests(unittest.TestCase):
@@ -942,7 +1013,7 @@ class ColourFormatTests(unittest.TestCase):
         bar = toolbar.ToolBar()
         picker = bar._tool_buttons["screenpick"]
         self.assertEqual(picker.iconSize(), QSize(40, 40))
-        self.assertEqual(picker.toolTip(), "Colour Picker (Ctrl+Shift+P)")
+        self.assertEqual(picker.toolTip(), "Colour picker (I)")
         self.assertIn("QToolTip", bar.styleSheet())
         self.assertEqual(bar._format_combo.currentData(), "hex")
 

@@ -51,9 +51,11 @@ def capture_demo_screenshots(folder: Path) -> int:
         saved.append(_toolbar_tooltip(editor, folder / "11-toolbar-tooltip.png"))
         saved.append(_grab(editor._toolbar, folder / "12-toolbar.png"))
         saved.append(_picker_loupe(folder / "13-picker-loupe.png"))
+        saved.append(_small_editor(folder / "14-editor-small.png"))
+        saved.append(_colour_card(folder / "15-colour-card.png"))
+        saved.append(_swatches(folder / "16-swatches.png"))
+        saved.append(_no_trails(folder / "17-no-trails.png"))
         editor.close()
-        saved.append(_record_dialog(folder / "04-record-picker.png"))
-        saved.append(_rec_control(folder / "05-rec-control.png"))
     except Exception:
         log.exception("Demo screenshots failed")
         return 1
@@ -282,44 +284,55 @@ def _picker_loupe(path: Path) -> Path:
         overlay.close()
 
 
-def _record_dialog(path: Path) -> Path:
-    from recorder import RecordDialog
+def _small_editor(path: Path) -> Path:
+    from editor import EditorWindow
 
-    dialog = RecordDialog("monitor")
-    dialog.resize(480, 320)
+    window = EditorWindow(Image.new("RGB", (240, 140), "#d7e6f5"))
     try:
-        return _grab(dialog, path)
+        return _grab(window, path)
     finally:
-        dialog.close()
+        window.close()
 
 
-def _rec_control(path: Path) -> Path:
-    from recorder import GrabSource, ScreenRecorder, video_output_path
+def _colour_card(path: Path) -> Path:
+    from colour_card import ColourCard
 
-    screen = QGuiApplication.primaryScreen()
-    if screen is None:
-        raise RuntimeError("No screen is available for the recording control")
-    area = screen.geometry()
-    source = GrabSource(screen, QRect(0, 0, min(320, area.width()), min(180, area.height())))
-    out = video_output_path()
-    recorder = ScreenRecorder(source, out, 15)
+    card = ColourCard("#1A2B3C")
     try:
-        import time
+        return _grab(card, path)
+    finally:
+        card.close()
 
-        recorder.start()
-        # Grab the live control before a failed capture tick can hide it.
-        recorder._timer.stop()
-        shot = _grab(recorder._control, path)
-        recorder._timer.start()
+
+def _swatches(path: Path) -> Path:
+    from swatches import SwatchBook, SwatchPanel
+
+    book = SwatchBook(path.with_suffix(".json"))
+    book.add("#E63946", "Red")
+    book.add("#1A2B3C", "Ink")
+    book.add("#F4A261", "Sand")
+    panel = SwatchPanel(book, lambda _hex: None)
+    panel.resize(280, 360)
+    try:
+        return _grab(panel, path)
+    finally:
+        panel.close()
+
+
+def _no_trails(path: Path) -> Path:
+    from editor import EditorWindow
+    from items import CalloutItem
+
+    window = EditorWindow(Image.new("RGB", (640, 360), "#1e1e1e"))
+    callout = CalloutItem(QPointF(40, 40), QColor("#e63946"), QColor("#ffffff"), QColor("#111111"), 6, 16)
+    window._scene.addItem(callout)
+    for step in range(12):
+        callout.setPos(80 + step * 18, 70 + step * 6)
+        window._scene.update()
         app = QApplication.instance()
         if app is not None:
-            deadline = time.time() + 1.2
-            while time.time() < deadline and recorder.is_active:
-                app.processEvents()
-                time.sleep(0.05)
-        if recorder.is_active:
-            recorder.stop()
-        return shot
+            app.processEvents()
+    try:
+        return _grab(window._view, path)
     finally:
-        if recorder.is_active:
-            recorder.stop()
+        window.close()

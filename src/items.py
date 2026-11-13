@@ -7,7 +7,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtGui import (
     QPainter, QPen, QBrush, QColor, QFont, QPainterPath,
-    QTextDocument, QTextCursor, QPixmap, QTransform
+    QTextDocument, QTextCursor, QPixmap, QTransform, QPainterPathStroker
 )
 from PyQt6.QtCore import Qt, QRectF, QPointF, QSizeF
 
@@ -83,6 +83,38 @@ class ResizeHandle(QGraphicsRectItem):
 # ---------------------------------------------------------------------------
 # Mixin: adds 8 resize handles to a rect-based item
 # ---------------------------------------------------------------------------
+class RotateHandle(QGraphicsEllipseItem):
+    """Drag to rotate the parent around its centre."""
+
+    def __init__(self, parent_item):
+        super().__init__(-6, -6, 12, 12, parent_item)
+        self.parent_item = parent_item
+        self.setBrush(QBrush(QColor("#0078d4")))
+        self.setPen(QPen(QColor("#ffffff"), 1))
+        self.setZValue(1001)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, False)
+
+    def mousePressEvent(self, event):
+        event.accept()
+
+    def mouseMoveEvent(self, event):
+        parent = self.parent_item
+        if getattr(parent, "locked", False):
+            event.accept()
+            return
+        origin = parent._get_rect().center() if hasattr(parent, "_get_rect") else parent.boundingRect().center()
+        parent.setTransformOriginPoint(origin)
+        centre = parent.mapToScene(origin)
+        pos = event.scenePos()
+        angle = math.degrees(math.atan2(pos.y() - centre.y(), pos.x() - centre.x())) + 90
+        parent.prepareGeometryChange()
+        parent.setRotation(angle)
+        event.accept()
+
+    def mouseReleaseEvent(self, event):
+        event.accept()
+
+
 class ResizableMixin:
     """Mixin for items that have a rect and support 8-handle resizing."""
 
@@ -106,6 +138,18 @@ class ResizableMixin:
         positions = self._handle_positions(r)
         for h, pos in zip(self.handles, positions):
             h.setPos(pos)
+        if getattr(self, "_rotate_handle", None) is not None:
+            self._rotate_handle.setPos(r.center().x(), r.top() - 22)
+
+    def _init_rotate_handle(self):
+        self._rotate_handle = RotateHandle(self)
+        self._rotate_handle.setVisible(False)
+
+    def _show_handles(self, visible: bool):
+        for h in self.handles:
+            h.setVisible(visible and not getattr(self, "locked", False))
+        if getattr(self, "_rotate_handle", None) is not None:
+            self._rotate_handle.setVisible(visible and not getattr(self, "locked", False))
 
     def _handle_positions(self, r: QRectF):
         cx = r.center().x()
@@ -188,7 +232,10 @@ class RectItem(ResizableMixin, QGraphicsRectItem):
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, True)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges, True)
+        self.corner_radius = 0
+        self.locked = False
         self._init_handles()
+        self._init_rotate_handle()
 
     def _apply_style(self):
         if self.stroke_enabled and self.line_width > 0:
@@ -197,10 +244,29 @@ class RectItem(ResizableMixin, QGraphicsRectItem):
             self.setPen(QPen(Qt.PenStyle.NoPen))
         self.setBrush(QBrush(self.fill_color))
 
+    def boundingRect(self) -> QRectF:
+        pad = self.line_width / 2.0 + HANDLE_HALF + 28
+        return self.rect().adjusted(-pad, -pad, pad, pad)
+
+    def shape(self) -> QPainterPath:
+        path = QPainterPath()
+        path.addRect(self.rect().adjusted(-self.line_width, -self.line_width, self.line_width, self.line_width))
+        return path
+
+    def paint(self, painter: QPainter, option, widget=None):
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(self.pen())
+        painter.setBrush(self.brush())
+        if self.corner_radius > 0:
+            painter.drawRoundedRect(self.rect(), self.corner_radius, self.corner_radius)
+        else:
+            painter.drawRect(self.rect())
+
     def _get_rect(self) -> QRectF:
         return self.rect()
 
     def _set_rect(self, r: QRectF):
+        self.prepareGeometryChange()
         self.setRect(r)
 
     def itemChange(self, change, value):
@@ -221,7 +287,9 @@ class EllipseItem(ResizableMixin, QGraphicsEllipseItem):
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, True)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges, True)
+        self.locked = False
         self._init_handles()
+        self._init_rotate_handle()
 
     def _apply_style(self):
         if self.stroke_enabled and self.line_width > 0:
@@ -230,10 +298,20 @@ class EllipseItem(ResizableMixin, QGraphicsEllipseItem):
             self.setPen(QPen(Qt.PenStyle.NoPen))
         self.setBrush(QBrush(self.fill_color))
 
+    def boundingRect(self) -> QRectF:
+        pad = self.line_width / 2.0 + HANDLE_HALF + 28
+        return self.rect().adjusted(-pad, -pad, pad, pad)
+
+    def shape(self) -> QPainterPath:
+        path = QPainterPath()
+        path.addEllipse(self.rect().adjusted(-self.line_width, -self.line_width, self.line_width, self.line_width))
+        return path
+
     def _get_rect(self) -> QRectF:
         return self.rect()
 
     def _set_rect(self, r: QRectF):
+        self.prepareGeometryChange()
         self.setRect(r)
 
     def itemChange(self, change, value):
@@ -284,8 +362,13 @@ class ArrowItem(QGraphicsItem):
         if self.style == "curved":
             control = self._curve_control()
             rect = rect.united(QRectF(control, control))
-        extra = self.line_width + 28
+        extra = self.line_width + HANDLE_HALF + 28
         return rect.adjusted(-extra, -extra, extra, extra)
+
+    def shape(self) -> QPainterPath:
+        path = QPainterPath()
+        path.addRect(self.boundingRect())
+        return path
 
     def _direction(self, origin: QPointF, target: QPointF):
         dx = target.x() - origin.x()
@@ -428,6 +511,11 @@ class TextItem(QGraphicsTextItem):
         self.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
         super().focusOutEvent(event)
 
+    def set_bold(self, bold: bool) -> None:
+        font = self.font()
+        font.setBold(bool(bold))
+        self.setFont(font)
+
     def keyPressEvent(self, event):
         super().keyPressEvent(event)
         # Swallow the key while editing so it cannot bubble out and delete
@@ -527,7 +615,13 @@ class CalloutItem(QGraphicsItem):
 
     def boundingRect(self) -> QRectF:
         pointer_h = 16
-        return self._rect.adjusted(-2, -2, 2, pointer_h + 2)
+        pad = self.line_width / 2.0 + HANDLE_HALF + 8
+        return self._rect.adjusted(-pad, -pad, pad, pointer_h + pad)
+
+    def shape(self) -> QPainterPath:
+        path = QPainterPath()
+        path.addRect(self.boundingRect())
+        return path
 
     def paint(self, painter: QPainter, option, widget=None):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -724,8 +818,15 @@ class StrokeItem(QGraphicsItem):
         self._path = path
 
     def boundingRect(self) -> QRectF:
-        extra = self.line_width / 2.0 + 2.0
+        extra = self.line_width / 2.0 + 8.0
         return self._path.boundingRect().adjusted(-extra, -extra, extra, extra)
+
+    def shape(self) -> QPainterPath:
+        stroker = QPainterPathStroker()
+        stroker.setWidth(self.line_width + 8)
+        if self._path.isEmpty():
+            return self._path
+        return stroker.createStroke(self._path)
 
     def paint(self, painter: QPainter, option, widget=None):
         pen = QPen(
@@ -742,3 +843,79 @@ class StrokeItem(QGraphicsItem):
             painter.drawPoint(self._points[0])
         elif len(self._points) > 1:
             painter.drawPath(self._path)
+
+
+class BlurItem(QGraphicsRectItem):
+    """Pixelate the picture underneath. Used to redact part of a snip."""
+
+    def __init__(self, rect: QRectF, block: int = 14):
+        super().__init__(rect)
+        self.block = max(4, int(block))
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, True)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges, True)
+        self.setPen(QPen(Qt.PenStyle.NoPen))
+        self.setBrush(QBrush(Qt.BrushStyle.NoBrush))
+
+    def boundingRect(self) -> QRectF:
+        return QGraphicsRectItem.boundingRect(self).adjusted(-2, -2, 2, 2)
+
+    def paint(self, painter: QPainter, option, widget=None):
+        scene = self.scene()
+        background = None
+        if scene is not None:
+            for item in scene.items():
+                if isinstance(item, QGraphicsPixmapItem) and item.zValue() < 0:
+                    background = item
+                    break
+        rect = self.rect().normalized()
+        block = self.block
+        painter.setPen(QPen(Qt.PenStyle.NoPen))
+        if background is None:
+            painter.setBrush(QBrush(QColor(80, 80, 80)))
+            painter.drawRect(rect)
+            return
+        image = background.pixmap().toImage()
+        y = int(rect.top())
+        while y < rect.bottom():
+            x = int(rect.left())
+            while x < rect.right():
+                scene_point = self.mapToScene(QPointF(x + block / 2, y + block / 2))
+                local = background.mapFromScene(scene_point)
+                px = max(0, min(image.width() - 1, int(local.x())))
+                py = max(0, min(image.height() - 1, int(local.y())))
+                painter.setBrush(QBrush(image.pixelColor(px, py)))
+                painter.drawRect(x, y, block, block)
+                x += block
+            y += block
+
+
+class NumberItem(QGraphicsItem):
+    """A numbered step marker."""
+
+    def __init__(self, number: int, pos: QPointF, color: QColor):
+        super().__init__()
+        self.number = max(1, int(number))
+        self.color = QColor(color)
+        self.setPos(pos)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, True)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges, True)
+
+    def boundingRect(self) -> QRectF:
+        return QRectF(-4, -4, 44, 44)
+
+    def shape(self) -> QPainterPath:
+        path = QPainterPath()
+        path.addEllipse(self.boundingRect())
+        return path
+
+    def paint(self, painter: QPainter, option, widget=None):
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(QPen(QColor("#ffffff"), 2))
+        painter.setBrush(QBrush(self.color))
+        painter.drawEllipse(0, 0, 36, 36)
+        painter.setPen(QPen(QColor("#ffffff")))
+        font = QFont("Arial", 14, QFont.Weight.Bold)
+        painter.setFont(font)
+        painter.drawText(QRectF(0, 0, 36, 36), int(Qt.AlignmentFlag.AlignCenter), str(self.number))
