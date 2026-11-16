@@ -47,7 +47,7 @@ QDockWidget::title {
 }
 QLabel { color: #e6e6e6; background: transparent; }
 QLabel#muted { color: #a0a0a0; }
-QPushButton, QComboBox, QSpinBox, QLineEdit, QListWidget, QPlainTextEdit, QTextEdit {
+QPushButton, QComboBox, QListWidget, QPlainTextEdit, QTextEdit {
     background-color: #383838;
     color: #e6e6e6;
     border: 1px solid #4a4a4a;
@@ -55,7 +55,15 @@ QPushButton, QComboBox, QSpinBox, QLineEdit, QListWidget, QPlainTextEdit, QTextE
     padding: 4px 8px;
     min-height: 22px;
 }
-QPushButton:hover, QComboBox:hover, QSpinBox:hover {
+QLineEdit {
+    background-color: #383838;
+    color: #e6e6e6;
+    border: 1px solid #4a4a4a;
+    border-radius: 4px;
+    padding: 2px 6px;
+    min-height: 18px;
+}
+QPushButton:hover, QComboBox:hover {
     border-color: #3d8ee6;
 }
 QPushButton:checked {
@@ -70,7 +78,6 @@ QComboBox QAbstractItemView, QListWidget {
     selection-color: #ffffff;
     outline: 0;
 }
-QSpinBox::up-button, QSpinBox::down-button { background: #4a4a4a; }
 QStatusBar { background: #323232; color: #e6e6e6; }
 QStatusBar::item { border: none; }
 QToolTip {
@@ -131,6 +138,7 @@ def apply_dark_theme(app: QApplication | None = None) -> None:
     app = app or QApplication.instance()
     if app is None:
         return
+    app.setStyle("Fusion")
     palette = QPalette()
     for group in (
         QPalette.ColorGroup.Active,

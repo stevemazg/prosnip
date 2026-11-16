@@ -72,6 +72,11 @@ def capture_demo_screenshots(folder: Path) -> int:
         saved.append(_steps_editor(editor, folder / "18-steps.png"))
         saved.append(_file_menu(editor, folder / "19-file-menu.png"))
         saved.append(_step_properties(editor, folder / "20-step-properties.png"))
+        saved.append(_sized_editor(folder / "21-editor-1024.png", 1024, 680, select_step=True))
+        saved.append(_colour_popup(folder / "22-colour-popup.png"))
+        saved.append(_arrange_menu(folder / "23-arrange-menu.png"))
+        saved.append(_sized_editor(folder / "24-editor-1920.png", 1920, 1080, select_step=False))
+        _assert_sizes()
         editor.close()
     except Exception:
         log.exception("Demo screenshots failed")
@@ -128,6 +133,7 @@ def _editor_window():
     window = EditorWindow(_sample_image())
     window.resize(1280, 860)
     window._place_tools()
+    window._on_tool_changed("pen")
     scene = window._scene
     pen = StrokeItem(QColor("#e63946"), 4)
     for point in ((90, 140), (180, 210), (280, 150), (390, 230)):
@@ -144,20 +150,15 @@ def _editor_window():
 
 
 def _colour_menu(editor, path: Path) -> Path:
-    combo = editor._toolbar._style_combo
-    combo.showPopup()
+    menu = editor._options.open_colour_menu()
     app = QApplication.instance()
     if app is not None:
         app.processEvents()
-    view = combo.view()
-    popup = view.window()
-    if popup is not editor and popup.isVisible() and popup.width() >= 120:
-        return _grab(popup, path)
-    view.setMinimumWidth(240)
-    row = max(24, view.sizeHintForRow(0))
-    view.setFixedSize(240, row * combo.count() + 8)
-    view.show()
-    return _grab(view, path)
+    menu.adjustSize()
+    try:
+        return _grab(menu, path)
+    finally:
+        menu.close()
 
 
 def _arrow_presets(path: Path) -> Path:
@@ -185,7 +186,7 @@ def _properties_panel(editor, path: Path) -> Path:
     strokes = [item for item in editor._scene.items() if item.__class__.__name__ == "StrokeItem"]
     if strokes:
         strokes[0].setSelected(True)
-    editor._properties.refresh()
+    editor._options.refresh()
     return _grab(editor, path)
 
 
@@ -329,22 +330,86 @@ def _step_properties(editor, path: Path) -> Path:
 
     step = next(item for item in editor._scene.items() if isinstance(item, NumberItem))
     step.setSelected(True)
-    editor._properties.refresh()
-    editor._properties_dock.raise_()
+    editor._options.refresh()
     return _grab(editor, path)
+
+
+def _present(window, width: int, height: int):
+    window.resize(width, height)
+    window.show()
+    app = QApplication.instance()
+    if app is not None:
+        app.processEvents()
+    window._place_tools()
+    window._view.fit_if_larger()
+    if app is not None:
+        app.processEvents()
+    window.assert_compact_layout()
+
+
+def _sized_editor(path: Path, width: int, height: int, select_step: bool) -> Path:
+    from items import NumberItem
+
+    window = _editor_window()
+    for number, pos in ((1, (70, 90)), (2, (180, 160)), (3, (300, 220))):
+        window._scene.addItem(NumberItem(number, QPointF(*pos), QColor("#e63946")))
+    window._scene.sync_next_number()
+    _present(window, width, height)
+    if select_step:
+        step = next(item for item in window._scene.items() if isinstance(item, NumberItem))
+        step.setSelected(True)
+        window._options.refresh()
+    try:
+        return _grab(window, path)
+    finally:
+        window.close()
+
+
+def _colour_popup(path: Path) -> Path:
+    window = _editor_window()
+    _present(window, 1024, 680)
+    menu = window._options.open_colour_menu()
+    app = QApplication.instance()
+    if app is not None:
+        app.processEvents()
+    menu.adjustSize()
+    try:
+        return _grab(menu, path)
+    finally:
+        menu.close()
+        window.close()
+
+
+def _arrange_menu(path: Path) -> Path:
+    window = _editor_window()
+    _present(window, 1024, 680)
+    menu = window._arrange_menu
+    menu.popup(window.mapToGlobal(QPoint(180, window.menuBar().height() + 4)))
+    app = QApplication.instance()
+    if app is not None:
+        app.processEvents()
+    try:
+        return _grab(menu, path)
+    finally:
+        menu.close()
+        window.close()
+
+
+def _assert_sizes() -> None:
+    window = _editor_window()
+    try:
+        for width, height in ((900, 600), (1024, 680), (1920, 1080)):
+            _present(window, width, height)
+            log.info("Layout %sx%s options=%s tools=%s", width, height, window._top_bar.height(), window._toolbar.height())
+    finally:
+        window.close()
 
 
 def _small_editor(path: Path) -> Path:
     from editor import EditorWindow
 
     window = EditorWindow(Image.new("RGB", (240, 140), "#d7e6f5"))
-    window.resize(1180, 760)
-    window.show()
-    app = QApplication.instance()
-    if app is not None:
-        app.processEvents()
-    window._place_tools()
-    window.assert_tools_left_of_canvas()
+    _present(window, 900, 600)
     try:
         return _grab(window, path)
     finally:

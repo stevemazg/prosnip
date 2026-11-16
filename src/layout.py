@@ -41,30 +41,25 @@ def fit_editor_frame(
     return x, y, width, height
 
 
-def tool_column_layout(count, available_height, max_button=52, min_button=44, spacing=4, margin=8):
-    """Columns and button size so every tool is on screen without scrolling.
+def tool_column_layout(count, available_height, button=32, spacing=4, margin=4):
+    """Two compact columns, or three when a short window cannot fit two.
 
-    One column at the large size is preferred. A short window wraps to two
-    columns before the icons shrink.
+    Buttons stay at 32px while they fit, then shrink by 2px down to 24.
     """
     import math
 
     count = max(1, int(count))
     available = max(1, int(available_height))
-    max_button = int(max_button)
-    min_button = int(min_button)
+    button = int(button)
 
-    def needed(columns, button):
+    def needed(columns, size):
         rows = math.ceil(count / columns)
-        return margin * 2 + rows * button + max(0, rows - 1) * spacing
+        return margin * 2 + rows * size + max(0, rows - 1) * spacing
 
-    if needed(1, max_button) <= available:
-        return 1, max_button
-    if needed(2, max_button) <= available:
-        return 2, max_button
-    button = max_button
-    while button > min_button:
-        button -= 2
-        if needed(2, button) <= available:
-            return 2, button
-    return 2, min_button
+    for columns in (2, 3):
+        size = button
+        while size >= 24:
+            if needed(columns, size) <= available:
+                return columns, size
+            size -= 2
+    return 3, 24

@@ -349,7 +349,7 @@ class LauncherTests(unittest.TestCase):
         labels = [label.text() for label in window.findChildren(main_window.QLabel)]
         self.assertIn("ProSnip-Bob", labels)
         self.assertIn(f"Version {editor.APP_VERSION}", labels)
-        self.assertEqual(editor.APP_VERSION, "1.6.0.0")
+        self.assertEqual(editor.APP_VERSION, "1.7.0.0")
         self.assertEqual(window.new_capture_button.text(), "New Capture")
         self.assertEqual(window.quit_button.text(), "Quit")
         self.assertIn("this system", window.shortcut_label.text())
@@ -631,8 +631,8 @@ class AppTests(unittest.TestCase):
             "Steve Maz",
             "ProSnip-Bob",
             "ProSnip-Bob screen capture and annotation tool",
-            "1.6.0.0",
-            "(1, 6, 0, 0)",
+            "1.7.0.0",
+            "(1, 7, 0, 0)",
             "ProSnip-Bob.exe",
             "Copyright (C) 2026 Steve Maz",
         ):
@@ -679,28 +679,31 @@ class ColourAndPenTests(unittest.TestCase):
         self.assertIn("color: #ffffff", bar.styleSheet())
 
     def test_style_menu_shows_swatches_and_light_text(self):
-        from PyQt6.QtGui import QPalette
         from styles import STYLES, colour_swatch
+        from options import ToolOptions
 
-        bar = toolbar.ToolBar()
-        combo = bar._style_combo
-        self.assertEqual(combo.count(), len(STYLES))
-        for index in range(combo.count()):
-            self.assertFalse(combo.itemIcon(index).isNull())
+        options = ToolOptions()
+        menu = options.build_colour_menu()
+        self.assertTrue(menu.windowFlags() & Qt.WindowType.Popup)
+        labels = [action.text() for action in menu.actions()]
+        self.assertIn("Copy as HEX", labels)
+        self.assertIn("Copy as RGB", labels)
+        self.assertIn("Copy as HSL", labels)
+        self.assertIn("Pick colour from screen", labels)
+        self.assertIn("More colours…", labels)
         swatch = colour_swatch(QColor("#e63946"), 16).toImage()
         self.assertEqual(swatch.pixelColor(8, 8).name(), "#e63946")
         self.assertEqual(swatch.pixelColor(1, 1).name(), "#f2f2f2")
-        text = combo.view().palette().color(QPalette.ColorRole.Text)
-        self.assertGreater(text.lightness(), 180)
-        self.assertGreaterEqual(combo.view().minimumWidth(), 200)
+        self.assertEqual(len(STYLES), 6)
 
     def test_selected_style_sets_the_pen_colour(self):
         from styles import STYLES
+        from options import ToolOptions
 
         scene = canvas.ProSnipScene()
-        bar = toolbar.ToolBar()
-        bar.style_changed.connect(lambda style: scene.set_pen_color(style.pen_color))
-        bar._style_combo.setCurrentText("Blue")
+        options = ToolOptions()
+        options.bind(scene, toolbar.ToolBar())
+        options.apply_named_style("Blue")
         self.assertEqual(scene._pen_color.name(), STYLES["Blue"].pen_color.name())
 
     def test_pen_stroke_can_be_undone_and_redone(self):
@@ -884,10 +887,11 @@ class EditorLayoutTests(unittest.TestCase):
         self.assertGreaterEqual(wide[3], 680)
         self.assertLessEqual(wide[2], 1280)
         from layout import tool_column_layout
-        self.assertEqual(tool_column_layout(16, 1000), (1, 52))
-        self.assertEqual(tool_column_layout(16, 640)[0], 2)
-        columns, button = tool_column_layout(16, 640)
-        self.assertGreaterEqual(button, 44)
+        self.assertEqual(tool_column_layout(16, 1000), (2, 32))
+        self.assertEqual(tool_column_layout(16, 640), (2, 32))
+        columns, button = tool_column_layout(16, 180)
+        self.assertEqual(columns, 3)
+        self.assertGreaterEqual(button, 24)
 
     def test_editor_tools_sit_left_of_the_canvas(self):
         from PIL import Image as PILImage
@@ -903,6 +907,21 @@ class EditorLayoutTests(unittest.TestCase):
         canvas = window._view.mapTo(window, window._view.rect().topLeft())
         self.assertLess(panel.x(), canvas.x())
         self.assertEqual(len(window._toolbar._tool_buttons), 16)
+
+    def test_editor_stays_compact_at_three_sizes(self):
+        from PIL import Image as PILImage
+        from PyQt6.QtWidgets import QDockWidget
+
+        window = editor.EditorWindow(PILImage.new("RGB", (960, 540), "#d7e6f5"))
+        self.addCleanup(window.close)
+        window.show()
+        for width, height in ((900, 600), (1024, 680), (1920, 1080)):
+            window.resize(width, height)
+            QApplication.processEvents()
+            window._place_tools()
+            window.assert_compact_layout()
+            self.assertLessEqual(window._top_bar.height(), 48)
+            self.assertEqual(window.findChildren(QDockWidget), [])
 
     def test_step_numbers_follow_the_badges_on_the_canvas(self):
         scene = canvas.ProSnipScene()
@@ -1084,10 +1103,10 @@ class ColourFormatTests(unittest.TestCase):
     def test_toolbar_uses_large_icons_and_names_the_picker(self):
         bar = toolbar.ToolBar()
         picker = bar._tool_buttons["screenpick"]
-        self.assertEqual(picker.iconSize(), QSize(40, 40))
+        self.assertLessEqual(picker.iconSize().width(), 32)
+        self.assertGreaterEqual(picker.width(), 28)
         self.assertEqual(picker.toolTip(), "Colour picker (I)")
         self.assertIn("QToolTip", bar.styleSheet())
-        self.assertEqual(bar._format_combo.currentData(), "hex")
 
 
 if __name__ == "__main__":

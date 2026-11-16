@@ -27,6 +27,7 @@ class ProSnipScene(QGraphicsScene):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.setBackgroundBrush(QBrush(QColor("#3a3a3a")))
         self._tool = "select"
         self._current_item = None
         self._press_pos = QPointF()
@@ -542,7 +543,8 @@ class ProSnipView(QGraphicsView):
         self.setDragMode(QGraphicsView.DragMode.NoDrag)
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
         self.setResizeAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
-        self.setStyleSheet("background-color: #2b2b2b; border: none;")
+        self.setBackgroundBrush(QBrush(QColor("#3a3a3a")))
+        self.setStyleSheet("background-color: #3a3a3a; border: none;")
 
     def is_text_editing(self) -> bool:
         scene = self.scene()
@@ -625,6 +627,18 @@ class ProSnipView(QGraphicsView):
         scene = self.scene()
         if scene is not None:
             self.fitInView(scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
+
+    def fit_if_larger(self):
+        """Scale the picture down so it is on screen. Leave a smaller one at 100%."""
+        scene = self.scene()
+        if scene is None:
+            return
+        rect = scene.sceneRect()
+        view = self.viewport().size()
+        if view.width() < 20 or view.height() < 20:
+            return
+        if rect.width() > view.width() or rect.height() > view.height():
+            self.fitInView(rect, Qt.AspectRatioMode.KeepAspectRatio)
 
     def set_select_drag(self, enabled: bool):
         mode = (

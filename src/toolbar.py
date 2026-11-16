@@ -1,16 +1,11 @@
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QPushButton, QComboBox,
-    QSpinBox, QLabel, QFrame, QColorDialog, QSizePolicy, QApplication,
+    QWidget, QVBoxLayout, QGridLayout, QPushButton, QSizePolicy,
 )
 from PyQt6.QtGui import QPixmap, QPainter, QColor, QIcon, QPen, QBrush, QFont
 from PyQt6.QtCore import pyqtSignal, Qt, QSize
 
-from colour import FORMATS, ColourHistory, parse_hex
 from layout import tool_column_layout
-from styles import (
-    STYLES, QuickStyle, DEFAULT_STYLE,
-    apply_combo_contrast, colour_swatch_icon, with_tooltip_style,
-)
+from styles import with_tooltip_style
 from stamp_picker import StampPickerDialog
 
 
@@ -185,184 +180,64 @@ TOOL_DEFS = [
 ]
 
 
-def _divider() -> QFrame:
-    line = QFrame()
-    line.setFrameShape(QFrame.Shape.HLine)
-    line.setStyleSheet("color: #555555;")
-    return line
-
-
 class ToolBar(QWidget):
     tool_changed = pyqtSignal(str)
-    style_changed = pyqtSignal(object)  # QuickStyle
     pen_color_changed = pyqtSignal(QColor)
-    line_width_changed = pyqtSignal(int)
-    font_size_changed = pyqtSignal(int)
-    undo_requested = pyqtSignal()
-    delete_requested = pyqtSignal()
     stamp_chosen = pyqtSignal(str)
     screen_pick_requested = pyqtSignal()
-    format_changed = pyqtSignal(str)
 
-    def __init__(self, parent=None, history: ColourHistory | None = None):
+    def __init__(self, parent=None, history=None):
         super().__init__(parent)
         self._current_tool = "select"
         self._tool_buttons = {}
-        self._pen_color = DEFAULT_STYLE.pen_color
-        self._history = history if history is not None else ColourHistory()
-        self._swatch_buttons = []
+        self._pen_color = QColor("#e63946")
+        self._history = history
         self._build_ui()
         self.arrange(1200)
         self.setStyleSheet(with_tooltip_style("""
-            QWidget { background-color: #1e1e1e; }
+            QWidget { background-color: #323232; }
             QPushButton {
-                background-color: #2d2d2d;
-                border: 1px solid #3d3d3d;
+                background-color: #383838;
+                border: 1px solid #4a4a4a;
                 border-radius: 4px;
-                color: #cccccc;
-                font-size: 11px;
+                color: #e6e6e6;
                 padding: 2px;
             }
             QPushButton:checked {
-                background-color: #0078d4;
+                background-color: #3d8ee6;
                 border-color: #ffffff;
                 border-width: 2px;
             }
             QPushButton:hover {
-                background-color: #3d3d3d;
-            }
-            QComboBox {
-                background-color: #2d2d2d;
-                border: 1px solid #3d3d3d;
-                color: #cccccc;
-                font-size: 10px;
-            }
-            QSpinBox {
-                background-color: #2d2d2d;
-                border: 1px solid #3d3d3d;
-                color: #cccccc;
-                font-size: 10px;
-            }
-            QLabel {
-                color: #f2f2f2;
-                font-size: 13px;
-                font-weight: 600;
-            }
-            QComboBox, QSpinBox {
-                font-size: 13px;
-                min-height: 22px;
+                background-color: #4a4a4a;
             }
         """))
-        apply_combo_contrast(self._style_combo)
 
     def _build_ui(self):
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setContentsMargins(4, 4, 4, 4)
         layout.setSpacing(4)
         self._grid = QGridLayout()
         self._grid.setContentsMargins(0, 0, 0, 0)
         self._grid.setSpacing(4)
         layout.addLayout(self._grid)
-        layout.addStretch(0)
 
         for tool_id, label, icon_fn in TOOL_DEFS:
             btn = QPushButton()
             btn.setCheckable(tool_id != "screenpick")
-            btn.setIcon(_make_icon(icon_fn, 40))
-            btn.setIconSize(QSize(40, 40))
-            btn.setFixedSize(52, 52)
+            btn.setIcon(_make_icon(icon_fn, 32))
+            btn.setIconSize(QSize(22, 22))
+            btn.setFixedSize(32, 32)
             btn.setToolTip(label)
             btn.clicked.connect(lambda checked, t=tool_id: self._on_tool_clicked(t))
             self._tool_buttons[tool_id] = btn
         self._tool_buttons["select"].setChecked(True)
 
-        self.controls_panel = QWidget()
-        controls = QHBoxLayout(self.controls_panel)
-        controls.setContentsMargins(6, 2, 6, 2)
-        controls.setSpacing(8)
-
-        # Quick styles
-        lbl_style = QLabel("Style")
-        lbl_style.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        controls.addWidget(lbl_style)
-        self._style_combo = QComboBox()
-        self._style_combo.setFixedHeight(26)
-        for name, style in STYLES.items():
-            self._style_combo.addItem(colour_swatch_icon(style.pen_color), name)
-        apply_combo_contrast(self._style_combo)
-        self._style_combo.setToolTip(self._style_combo.currentText())
-        self._style_combo.currentTextChanged.connect(self._on_style_changed)
-        controls.addWidget(self._style_combo)
-
-        lbl_format = QLabel("Code")
-        lbl_format.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        controls.addWidget(lbl_format)
-        self._format_combo = QComboBox()
-        self._format_combo.setFixedHeight(28)
-        for key in FORMATS:
-            self._format_combo.addItem(key.upper(), key)
-        index = self._format_combo.findData(self._history.format)
-        if index >= 0:
-            self._format_combo.setCurrentIndex(index)
-        apply_combo_contrast(self._format_combo)
-        self._format_combo.setToolTip("Colour code format")
-        self._format_combo.currentIndexChanged.connect(self._on_format_changed)
-        controls.addWidget(self._format_combo)
-
-        self._swatch_row = QWidget()
-        self._swatch_layout = QVBoxLayout(self._swatch_row)
-        self._swatch_layout.setContentsMargins(0, 0, 0, 0)
-        self._swatch_layout.setSpacing(4)
-        controls.addWidget(self._swatch_row)
-        self.refresh_swatches()
-
-        # Color picker
-        self._color_btn = QPushButton()
-        self._color_btn.setFixedHeight(28)
-        self._color_btn.setToolTip("Pen colour")
-        self._update_color_btn()
-        self._color_btn.clicked.connect(self._on_pick_color)
-        controls.addWidget(self._color_btn)
-
-        # Line width
-        lbl_lw = QLabel("Width")
-        lbl_lw.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        controls.addWidget(lbl_lw)
-        self._lw_spin = QSpinBox()
-        self._lw_spin.setRange(1, 16)
-        self._lw_spin.setToolTip("Line and pen thickness (2, 4, 8, 12)")
-        self._lw_spin.setValue(DEFAULT_STYLE.line_width)
-        self._lw_spin.setFixedHeight(32)
-        self._lw_spin.valueChanged.connect(self.line_width_changed.emit)
-        controls.addWidget(self._lw_spin)
-
-        # Font size
-        lbl_fs = QLabel("Font")
-        lbl_fs.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        controls.addWidget(lbl_fs)
-        self._fs_spin = QSpinBox()
-        self._fs_spin.setRange(8, 48)
-        self._fs_spin.setValue(DEFAULT_STYLE.font_size)
-        self._fs_spin.setFixedHeight(32)
-        self._fs_spin.valueChanged.connect(self.font_size_changed.emit)
-        controls.addWidget(self._fs_spin)
-
-        actions = QHBoxLayout()
-        btn_undo = QPushButton("Undo")
-        btn_undo.setToolTip("Undo (Ctrl+Z)")
-        btn_undo.clicked.connect(self.undo_requested.emit)
-        btn_del = QPushButton("Delete")
-        btn_del.setToolTip("Delete selected (Del)")
-        btn_del.clicked.connect(self.delete_requested.emit)
-        actions.addWidget(btn_undo)
-        actions.addWidget(btn_del)
-        controls.addLayout(actions)
-
     def arrange(self, available_height: int) -> None:
-        """Lay every tool out in one or two columns. Nothing scrolls."""
+        """Lay every tool out in two columns, or three when the window is short."""
         count = len(TOOL_DEFS)
         columns, button = tool_column_layout(count, available_height)
-        icon = max(32, button - 12)
+        icon = max(18, button - 10)
         rows = (count + columns - 1) // columns
         while self._grid.count():
             self._grid.takeAt(0)
@@ -373,59 +248,10 @@ class ToolBar(QWidget):
             row = index % rows
             column = index // rows
             self._grid.addWidget(btn, row, column)
-        width = 12 + columns * button + max(0, columns - 1) * 4
-        height = 12 + rows * button + max(0, rows - 1) * 4
-        self.setFixedWidth(width)
-        self.setMinimumHeight(height)
-        self.setMaximumHeight(16777215)
-        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
-
-    def _on_format_changed(self, _index: int):
-        fmt = self._format_combo.currentData()
-        if not fmt:
-            return
-        self._history.set_format(str(fmt))
-        self.refresh_swatches()
-        self.format_changed.emit(str(fmt))
-
-    def refresh_swatches(self):
-        while self._swatch_layout.count():
-            item = self._swatch_layout.takeAt(0)
-            widget = item.widget()
-            if widget is not None:
-                widget.deleteLater()
-        self._swatch_buttons = []
-        for code in self._history.colours:
-            button = QPushButton()
-            button.setFixedSize(88, 22)
-            button.setToolTip(f"Copy {self._history.display(code)}")
-            parsed = parse_hex(code)
-            colour = f"#{parsed[0]:02x}{parsed[1]:02x}{parsed[2]:02x}" if parsed else "#000000"
-            button.setStyleSheet(
-                f"background-color: {colour}; border: 1px solid #ffffff; border-radius: 3px;"
-            )
-            button.clicked.connect(lambda _checked=False, hex_code=code: self._recopy_swatch(hex_code))
-            self._swatch_layout.addWidget(button)
-            self._swatch_buttons.append(button)
-
-    def reload_history(self):
-        self._history.load()
-        index = self._format_combo.findData(self._history.format)
-        if index >= 0 and index != self._format_combo.currentIndex():
-            self._format_combo.blockSignals(True)
-            self._format_combo.setCurrentIndex(index)
-            self._format_combo.blockSignals(False)
-        self.refresh_swatches()
-
-    def _recopy_swatch(self, hex_code: str):
-        text = self._history.display(hex_code)
-        clipboard = QApplication.clipboard()
-        if clipboard is not None:
-            clipboard.setText(text)
-        parsed = parse_hex(hex_code)
-        if parsed is not None:
-            self.set_pen_colour(QColor(*parsed))
-            self.pen_color_changed.emit(self._pen_color)
+        width = 8 + columns * button + max(0, columns - 1) * 4
+        height = 8 + rows * button + max(0, rows - 1) * 4
+        self.setFixedSize(width, height)
+        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
 
     def _on_tool_clicked(self, tool_id: str):
         if tool_id == "screenpick":
@@ -451,33 +277,8 @@ class ToolBar(QWidget):
 
         self.tool_changed.emit(tool_id)
 
-    def _on_style_changed(self, name: str):
-        if name in STYLES:
-            style = STYLES[name]
-            self._pen_color = style.pen_color
-            self._update_color_btn()
-            self._lw_spin.setValue(style.line_width)
-            self._fs_spin.setValue(style.font_size)
-            self._style_combo.setToolTip(name)
-            self.style_changed.emit(style)
-
-    def _on_pick_color(self):
-        color = QColorDialog.getColor(self._pen_color, self, "Choose Pen Colour")
-        if color.isValid():
-            self._pen_color = color
-            self._update_color_btn()
-            self.pen_color_changed.emit(color)
-
-    def _update_color_btn(self):
-        pix = QPixmap(32, 16)
-        pix.fill(self._pen_color)
-        self._color_btn.setIcon(QIcon(pix))
-        self._color_btn.setIconSize(QSize(32, 16))
-        self._color_btn.setToolTip(f"Pen colour: {self._pen_color.name()}")
-
     def set_pen_colour(self, color: QColor):
         self._pen_color = QColor(color)
-        self._update_color_btn()
 
     def set_tool(self, tool_id: str):
         if tool_id not in self._tool_buttons or tool_id == "screenpick":

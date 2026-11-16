@@ -37,6 +37,12 @@ jobs:
         run: |
           .venv\Scripts\python.exe -c "import sys; sys.path.insert(0, 'src'); import capture, editor, canvas, items, toolbar, stamp_picker, styles, hotkey, instance, main_window, colour, colour_picker, main"
 
+      - name: Check the editor layout
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          .venv\Scripts\python.exe -m unittest tests.test_prosnip_bob.EditorLayoutTests.test_editor_stays_compact_at_three_sizes tests.test_prosnip_bob.EditorLayoutTests.test_text_and_panel_contrast
+
       - name: Read application version
         id: version
         run: |

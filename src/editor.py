@@ -2,8 +2,8 @@ from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
     QToolBar, QPushButton, QFileDialog, QDialog,
     QFormLayout, QSpinBox, QCheckBox, QDialogButtonBox,
-    QGraphicsPixmapItem, QApplication, QLabel, QSizePolicy,
-    QDockWidget, QMenu, QStatusBar, QMessageBox, QLineEdit, QAbstractSpinBox,
+    QGraphicsPixmapItem, QApplication, QLabel,
+    QMessageBox, QLineEdit, QAbstractSpinBox,
 )
 from PyQt6.QtCore import Qt, QRectF, QPointF, QEvent, QRect, pyqtSignal
 from PyQt6.QtGui import (
@@ -14,11 +14,11 @@ from PyQt6.QtGui import (
 from canvas import ProSnipScene, ProSnipView
 from colour import ColourHistory
 from layout import fit_editor_frame
-from properties import PropertiesPanel
-from swatches import SwatchBook, SwatchPanel
+from options import ToolOptions
+from swatches import SwatchBook
 from toolbar import ToolBar
-from styles import QuickStyle, with_tooltip_style
-from theme import apply_dark_theme, contrast_ratio
+from styles import with_tooltip_style
+from theme import apply_dark_theme
 
 import io
 import math
@@ -27,7 +27,7 @@ from pathlib import Path
 from PIL import Image, ImageOps
 
 APP_NAME = "ProSnip-Bob"
-APP_VERSION = "1.6.0.0"
+APP_VERSION = "1.7.0.0"
 
 
 def clamp_crop_rect(rect: QRectF, width: int, height: int) -> QRect | None:
@@ -141,9 +141,9 @@ class EditorWindow(QMainWindow):
 
         apply_dark_theme()
         self.setWindowTitle(f"{APP_NAME} — Untitled")
-        # Wide enough for the top actions, tall enough for two tool columns.
-        self.setMinimumSize(1080, 680)
+        self.setMinimumSize(900, 600)
         self.setStyleSheet(with_tooltip_style("background-color: #2b2b2b;"))
+        self._did_fit = False
 
         self._placing_tools = False
         self._scene = ProSnipScene()
@@ -174,8 +174,8 @@ class EditorWindow(QMainWindow):
         frame = fit_editor_frame(
             self._pil_image.width,
             self._pil_image.height,
-            400,
-            56,
+            120,
+            110,
             screen.availableGeometry(),
             screen.devicePixelRatio() or 1.0,
             minimum_w=self.minimumWidth(),
@@ -186,58 +186,45 @@ class EditorWindow(QMainWindow):
 
     def _setup_ui(self):
         self._build_menus()
+        self._options = ToolOptions(self._history, self._swatches)
+        self._options.bind(self._scene, self._toolbar)
         options = QToolBar("Tool options")
-        options.setObjectName("ToolOptions")
+        options.setObjectName("ToolOptionsBar")
         options.setMovable(False)
         options.setFloatable(False)
-        options.addWidget(self._toolbar.controls_panel)
+        options.setFixedHeight(40)
+        options.setMaximumHeight(48)
+        options.addWidget(self._options)
         self.addToolBar(Qt.ToolBarArea.TopToolBarArea, options)
         self._top_bar = options
 
         central = QWidget()
+        central.setObjectName("EditorBody")
+        central.setStyleSheet("QWidget#EditorBody { background: #323232; }")
         self.setCentralWidget(central)
-        self._toolbar.setObjectName("ToolPanel")
+        self._tool_host = QWidget()
+        self._tool_host.setObjectName("ToolPanel")
+        self._tool_host.setStyleSheet("QWidget#ToolPanel { background: #323232; }")
+        host = QVBoxLayout(self._tool_host)
+        host.setContentsMargins(0, 0, 0, 0)
+        host.setSpacing(0)
+        host.addWidget(self._toolbar, 0, Qt.AlignmentFlag.AlignTop)
+        host.addStretch(1)
         self._view.setObjectName("EditorCanvas")
         row = QHBoxLayout(central)
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(0)
-        row.addWidget(self._toolbar, 0)
+        row.addWidget(self._tool_host, 0)
         row.addWidget(self._view, 1)
-
-        self._properties = PropertiesPanel()
-        self._properties.bind(self._scene, self._toolbar)
-        self._swatch_panel = SwatchPanel(self._swatches, self._apply_swatch)
-        self._colour_panel = QWidget()
-        colour_layout = QVBoxLayout(self._colour_panel)
-        colour_layout.addWidget(QLabel("Pen colour"))
-        self._colour_swatch = QLabel()
-        self._colour_swatch.setFixedHeight(48)
-        colour_layout.addWidget(self._colour_swatch)
-        colour_layout.addStretch(1)
-        self._properties_dock = self._dock("Properties", self._properties)
-        self._swatch_dock = self._dock("Swatches", self._swatch_panel)
-        self._colour_dock = self._dock("Colour", self._colour_panel)
-        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self._properties_dock)
-        self.tabifyDockWidget(self._properties_dock, self._swatch_dock)
-        self.tabifyDockWidget(self._swatch_dock, self._colour_dock)
-        self._properties_dock.raise_()
-        self._view_menu.addAction("Show Properties", self._properties_dock.show)
-        self._view_menu.addAction("Show Swatches", self._swatch_dock.show)
-        self._view_menu.addAction("Show Colour", self._colour_dock.show)
-        self._refresh_colour_swatch()
         self._place_tools()
         self._build_status()
 
     def showEvent(self, event):
         super().showEvent(event)
-        if getattr(self, "_properties_dock", None) is None:
-            return
-        height = max(1, self.height())
-        self.resizeDocks(
-            [self._properties_dock, self._swatch_dock],
-            [int(height * 0.62), int(height * 0.28)],
-            Qt.Orientation.Vertical,
-        )
+        self._place_tools()
+        if not self._did_fit:
+            self._did_fit = True
+            self._view.fit_if_larger()
 
     def _build_menus(self):
         bar = self.menuBar()
@@ -252,6 +239,8 @@ class EditorWindow(QMainWindow):
         self._btn_copy.setText("Copy")
         self._btn_copy.setToolTip("Copy (Ctrl+C)")
         file_menu.addAction("Export…", self._save_png)
+        file_menu.addSeparator()
+        file_menu.addAction("Preferences…", self._preferences)
         file_menu.addSeparator()
         file_menu.addAction("Quit", self.close)
 
@@ -285,7 +274,8 @@ class EditorWindow(QMainWindow):
         arrange.addAction("Bring to front", self._scene.bring_to_front)
         arrange.addAction("Send to back", self._scene.send_to_back)
         arrange.addAction("Lock item", self._scene.toggle_lock)
-        arrange.addAction("Renumber all steps in order", self._scene.renumber_steps)
+        arrange.addAction("Renumber steps", self._scene.renumber_steps)
+        self._arrange_menu = arrange
 
         view = bar.addMenu("View")
         view.addAction("Zoom in", lambda: self._view.scale(1.15, 1.15))
@@ -297,9 +287,6 @@ class EditorWindow(QMainWindow):
         actual.setShortcut(QKeySequence("Ctrl+1"))
         actual.triggered.connect(self._view.resetTransform)
         self._view_menu = view
-
-        settings = bar.addMenu("Settings")
-        settings.addAction("Auto-copy after capture is in the start window")
 
         help_menu = bar.addMenu("Help")
         help_menu.addAction("About ProSnip-Bob", self._about)
@@ -314,20 +301,27 @@ class EditorWindow(QMainWindow):
             label.setObjectName("muted")
             status.addWidget(label)
         self._view.cursor_moved.connect(self._on_cursor)
-        self._scene.numbers_changed.connect(self._properties._next_spin.setValue)
-        self._scene.number_edit_requested.connect(lambda _item: self._properties.focus_step_editor())
 
     def _on_cursor(self, pos: QPointF):
         self._status_pos.setText(f"x {int(pos.x())}  y {int(pos.y())}")
         zoom = int(round(self._view.transform().m11() * 100))
         self._status_zoom.setText(f"{zoom}%")
 
-    def _refresh_colour_swatch(self):
-        colour = self._toolbar._pen_color
-        self._colour_swatch.setStyleSheet(
-            f"background: {colour.name()}; border: 1px solid #4a4a4a;"
+    def _preferences(self):
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Preferences")
+        layout = QVBoxLayout(dialog)
+        auto = QCheckBox("Copy the snip to the clipboard after a capture")
+        auto.setChecked(self._history.auto_copy)
+        layout.addWidget(auto)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
-        self._colour_swatch.setToolTip(colour.name())
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self._history.set_auto_copy(auto.isChecked())
 
     def _select_all(self):
         focus = QApplication.focusWidget()
@@ -369,8 +363,13 @@ class EditorWindow(QMainWindow):
         )
 
     def _place_tools(self):
-        top = self._top_bar.height() if getattr(self, "_top_bar", None) is not None else 48
-        self._toolbar.arrange(max(240, self.height() - top - 8))
+        if getattr(self, "_top_bar", None) is not None:
+            self._top_bar.setFixedHeight(40)
+        central = self.centralWidget()
+        available = central.height() if central is not None and central.height() > 80 else max(240, self.height() - 140)
+        self._toolbar.arrange(available)
+        if getattr(self, "_tool_host", None) is not None:
+            self._tool_host.setFixedWidth(self._toolbar.width())
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -381,14 +380,6 @@ class EditorWindow(QMainWindow):
             self._place_tools()
         finally:
             self._placing_tools = False
-
-    def _dock(self, title: str, widget: QWidget) -> QDockWidget:
-        dock = QDockWidget(title, self)
-        dock.setWidget(widget)
-        dock.setAllowedAreas(Qt.DockWidgetArea.RightDockWidgetArea | Qt.DockWidgetArea.LeftDockWidgetArea)
-        dock.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetClosable)
-        dock.setFloating(False)
-        return dock
 
     def assert_tools_left_of_canvas(self) -> None:
         """Fail if the tools are not a left-hand column beside the canvas."""
@@ -401,7 +392,7 @@ class EditorWindow(QMainWindow):
         panel_rect = QRect(origin, panel.size())
         view_rect = QRect(view_origin, view.size())
         problems = []
-        if panel.width() < 40 or panel.height() < 200:
+        if panel.width() < 40 or panel.height() < 80:
             problems.append(f"tool panel is too small ({panel.width()}x{panel.height()})")
         if origin.x() >= view_origin.x():
             problems.append(f"tool panel x {origin.x()} is not left of the canvas x {view_origin.x()}")
@@ -421,28 +412,90 @@ class EditorWindow(QMainWindow):
         if problems:
             raise RuntimeError("Editor tool layout failed: " + "; ".join(problems))
 
-    def _apply_swatch(self, hex_code: str):
-        colour = QColor(hex_code)
-        self._toolbar.set_pen_colour(colour)
-        self._scene.set_pen_color(colour)
-        clipboard = QApplication.clipboard()
-        if clipboard is not None:
-            clipboard.setText(self._history.display(hex_code))
+    def assert_compact_layout(self) -> None:
+        """Fail when the simplified editor clips, overlaps, or grows a dock."""
+        from PyQt6.QtWidgets import QDockWidget, QScrollArea
+
+        problems = []
+        if self.findChildren(QDockWidget):
+            problems.append("a dock widget is still in the editor")
+        options_h = self._top_bar.height() if self._top_bar is not None else 0
+        if options_h > 48 or self._options.height() > 48:
+            problems.append(
+                f"tool options bar is {options_h}px (options widget {self._options.height()}px)"
+            )
+        window = self.rect()
+        if len(self._toolbar._tool_buttons) != 16:
+            problems.append(f"expected 16 tools, found {len(self._toolbar._tool_buttons)}")
+        for tool_id, button in self._toolbar._tool_buttons.items():
+            if not button.isVisible():
+                problems.append(f"{tool_id} is hidden")
+                continue
+            top_left = button.mapTo(self, button.rect().topLeft())
+            bottom_right = button.mapTo(self, button.rect().bottomRight())
+            if not window.contains(top_left) or not window.contains(bottom_right):
+                problems.append(
+                    f"{tool_id} sits outside the window at {top_left.x()},{top_left.y()}"
+                )
+            ancestor = button.parentWidget()
+            while ancestor is not None:
+                if isinstance(ancestor, QScrollArea):
+                    problems.append(f"{tool_id} is inside a scroll area")
+                    break
+                ancestor = ancestor.parentWidget()
+
+        def area(widget):
+            if widget is None or not widget.isVisible() or widget.height() < 8 or widget.width() < 8:
+                return None
+            return QRect(widget.mapTo(self, widget.rect().topLeft()), widget.size())
+
+        named = [
+            ("menu", self.menuBar()),
+            ("options", self._top_bar),
+            ("tools", self._tool_host),
+            ("canvas", self._view),
+            ("status", self.statusBar()),
+        ]
+        rects = [(name, area(widget)) for name, widget in named]
+        rects = [(name, rect) for name, rect in rects if rect is not None]
+        for index, (name, rect) in enumerate(rects):
+            for other, other_rect in rects[index + 1:]:
+                hit = rect.intersected(other_rect)
+                if hit.width() > 3 and hit.height() > 3:
+                    problems.append(f"{name} overlaps {other} by {hit.width()}x{hit.height()}")
+        menu = self._options.build_colour_menu()
+        layout = self._options.layout()
+        if layout is not None:
+            for index in range(layout.count()):
+                item = layout.itemAt(index)
+                if item is not None and item.widget() is menu:
+                    problems.append("colour popup is inside the options bar")
+        menu.popup(self.mapToGlobal(self.rect().center()))
+        app = QApplication.instance()
+        if app is not None:
+            app.processEvents()
+        if menu.window() is self:
+            problems.append("colour popup is not a separate window")
+        if not (menu.windowFlags() & Qt.WindowType.Popup):
+            problems.append("colour popup is not a popup")
+        menu.close()
+        if self._top_bar.height() > 48:
+            problems.append("opening the colour popup grew the options bar")
+        try:
+            self.assert_tools_left_of_canvas()
+        except RuntimeError as exc:
+            problems.append(str(exc))
+        if problems:
+            raise RuntimeError("Editor layout failed: " + "; ".join(problems))
 
     def _connect_signals(self):
         self._toolbar.tool_changed.connect(self._on_tool_changed)
-        self._toolbar.style_changed.connect(self._on_style_changed)
         self._toolbar.pen_color_changed.connect(self._scene.set_pen_color)
         self._scene.colour_picked.connect(self._toolbar.set_pen_colour)
-        self._scene.colour_picked.connect(lambda _colour: self._properties.refresh())
-        self._toolbar.line_width_changed.connect(self._scene.set_line_width)
-        self._toolbar.font_size_changed.connect(self._scene.set_font_size)
-        self._toolbar.undo_requested.connect(self._scene.undo)
-        self._toolbar.delete_requested.connect(self._scene.delete_selected)
         self._toolbar.stamp_chosen.connect(self._scene.set_last_stamp)
         self._scene.crop_requested.connect(self._on_crop_requested)
         self._toolbar.screen_pick_requested.connect(self.screen_pick_requested.emit)
-        self._toolbar.pen_color_changed.connect(lambda _colour: self._refresh_colour_swatch())
+        self._options.screen_pick_requested.connect(self.screen_pick_requested.emit)
         self._scene.selectionChanged.connect(self._refresh_status_tool)
 
     def _setup_shortcuts(self):
@@ -510,6 +563,7 @@ class EditorWindow(QMainWindow):
     def _on_tool_changed(self, tool: str):
         self._scene.set_tool(tool)
         self._toolbar.set_tool(tool)
+        self._options.refresh()
         self._refresh_status_tool()
 
     def _refresh_status_tool(self):
@@ -530,13 +584,6 @@ class EditorWindow(QMainWindow):
             "screenpick": "Colour picker",
         }
         self._status_tool.setText(names.get(self._scene._tool, self._scene._tool))
-
-    def _on_style_changed(self, style: QuickStyle):
-        self._scene.set_pen_color(style.pen_color)
-        self._scene.set_fill_color(style.fill_color)
-        self._scene.set_text_color(style.text_color)
-        self._scene.set_line_width(style.line_width)
-        self._scene.set_font_size(style.font_size)
 
     def _render_scene(self) -> QImage:
         scene = self._scene
