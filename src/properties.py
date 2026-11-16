@@ -22,6 +22,7 @@ from items import (
     CalloutItem,
     EllipseItem,
     ImageOverlayItem,
+    NumberItem,
     RectItem,
     StampItem,
     StrokeItem,
@@ -39,7 +40,7 @@ ARROW_LABELS = {
 
 
 def _annotations(items):
-    kinds = (RectItem, EllipseItem, ArrowItem, TextItem, CalloutItem, StampItem, StrokeItem, ImageOverlayItem)
+    kinds = (RectItem, EllipseItem, ArrowItem, TextItem, CalloutItem, StampItem, StrokeItem, ImageOverlayItem, NumberItem)
     return [item for item in items if isinstance(item, kinds)]
 
 
@@ -53,14 +54,14 @@ class PropertiesPanel(QWidget):
         self.setFixedWidth(250)
         self.setStyleSheet(
             """
-            QWidget { background: #1e1e1e; color: #f2f2f2; font-size: 13px; }
-            QLabel { color: #f2f2f2; font-size: 13px; }
+            QWidget { background: #323232; color: #e6e6e6; font-size: 13px; }
+            QLabel { color: #e6e6e6; background: transparent; font-size: 13px; }
             QPushButton, QComboBox, QSpinBox {
-                background: #2d2d2d; color: #f7f7f7;
-                border: 1px solid #6a6a6a; border-radius: 4px;
+                background: #383838; color: #e6e6e6;
+                border: 1px solid #4a4a4a; border-radius: 4px;
                 padding: 4px; min-height: 24px; font-size: 13px;
             }
-            QCheckBox { color: #f2f2f2; font-size: 13px; spacing: 6px; }
+            QCheckBox { color: #e6e6e6; font-size: 13px; spacing: 6px; background: transparent; }
             """
         )
         self._build()
@@ -113,7 +114,20 @@ class PropertiesPanel(QWidget):
         self._bg_btn = QPushButton("Text background")
         self._bg_btn.clicked.connect(self._pick_background)
         form.addRow("", self._bg_btn)
+        self._next_spin = QSpinBox()
+        self._next_spin.setRange(1, 999)
+        self._next_spin.setToolTip("Number placed by the next step badge")
+        self._next_spin.valueChanged.connect(self._set_next_number)
+        form.addRow("Next number", self._next_spin)
+        self._step_spin = QSpinBox()
+        self._step_spin.setRange(1, 999)
+        self._step_spin.setToolTip("Number on the selected step")
+        self._step_spin.valueChanged.connect(self._set_step_number)
+        form.addRow("Step number", self._step_spin)
+        self._renumber = QPushButton("Renumber all steps in order")
+        self._renumber.clicked.connect(self._renumber_steps)
         layout.addLayout(form)
+        layout.addWidget(self._renumber)
         self._pick_btn = QPushButton("Pick colour from image")
         self._pick_btn.clicked.connect(self._start_eyedropper)
         layout.addWidget(self._pick_btn)
@@ -149,6 +163,11 @@ class PropertiesPanel(QWidget):
             if index >= 0:
                 self._arrow_style.setCurrentIndex(index)
             self._font_size.setValue(self._scene.font_size)
+        self._next_spin.setValue(self._scene._next_number)
+        steps = [item for item in self._selected if isinstance(item, NumberItem)]
+        self._step_spin.setEnabled(len(steps) == 1)
+        if len(steps) == 1:
+            self._step_spin.setValue(steps[0].number)
         self._paint_colour_button(self._colour_btn, self._colour)
         self._paint_colour_button(self._stroke_btn, self._stroke)
         self._paint_colour_button(self._bg_btn, self._background)
@@ -190,6 +209,9 @@ class PropertiesPanel(QWidget):
             self._stroke = QColor(item.pen_color)
             self._stroke_on.setChecked(item.stroke_enabled)
             self._stroke_width.setValue(item.line_width)
+        elif isinstance(item, NumberItem):
+            self._colour = QColor(item.color)
+            self._step_spin.setValue(item.number)
         elif isinstance(item, StampItem):
             self._stroke_on.setChecked(False)
 
@@ -220,6 +242,29 @@ class PropertiesPanel(QWidget):
             self._background = colour
             self._paint_colour_button(self._bg_btn, colour)
             self._apply()
+
+    def _set_next_number(self, value: int):
+        if self._updating or self._scene is None:
+            return
+        self._scene.set_next_number(value)
+
+    def _set_step_number(self, value: int):
+        if self._updating or not self._selected:
+            return
+        for item in self._selected:
+            if isinstance(item, NumberItem):
+                item.set_number(value)
+        if self._scene is not None:
+            self._scene.sync_next_number()
+
+    def _renumber_steps(self):
+        if self._scene is not None:
+            self._scene.renumber_steps()
+            self.refresh()
+
+    def focus_step_editor(self):
+        self._step_spin.setFocus()
+        self._step_spin.selectAll()
 
     def _start_eyedropper(self):
         if self._toolbar is not None:
@@ -291,4 +336,8 @@ class PropertiesPanel(QWidget):
             item.pen_color = QColor(self._stroke)
             item.stroke_enabled = self._stroke_on.isChecked()
             item.line_width = self._stroke_width.value()
+            item.update()
+        elif isinstance(item, NumberItem):
+            item.color = QColor(self._colour)
+            item.set_number(self._step_spin.value())
             item.update()

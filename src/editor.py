@@ -3,9 +3,9 @@ from PyQt6.QtWidgets import (
     QToolBar, QPushButton, QFileDialog, QDialog,
     QFormLayout, QSpinBox, QCheckBox, QDialogButtonBox,
     QGraphicsPixmapItem, QApplication, QLabel, QSizePolicy,
-    QScrollArea, QDockWidget,
+    QDockWidget, QMenu, QStatusBar, QMessageBox, QLineEdit, QAbstractSpinBox,
 )
-from PyQt6.QtCore import Qt, QRectF, QEvent, QRect, pyqtSignal
+from PyQt6.QtCore import Qt, QRectF, QPointF, QEvent, QRect, pyqtSignal
 from PyQt6.QtGui import (
     QPixmap, QImage, QPainter, QColor, QKeySequence,
     QShortcut, QKeyEvent, QGuiApplication,
@@ -18,6 +18,7 @@ from properties import PropertiesPanel
 from swatches import SwatchBook, SwatchPanel
 from toolbar import ToolBar
 from styles import QuickStyle, with_tooltip_style
+from theme import apply_dark_theme, contrast_ratio
 
 import io
 import math
@@ -26,7 +27,7 @@ from pathlib import Path
 from PIL import Image, ImageOps
 
 APP_NAME = "ProSnip-Bob"
-APP_VERSION = "1.5.2.0"
+APP_VERSION = "1.6.0.0"
 
 
 def clamp_crop_rect(rect: QRectF, width: int, height: int) -> QRect | None:
@@ -130,6 +131,7 @@ class ResizeDialog(QDialog):
 
 class EditorWindow(QMainWindow):
     screen_pick_requested = pyqtSignal()
+    new_capture_requested = pyqtSignal()
 
     def __init__(self, pil_image: Image.Image, parent=None):
         super().__init__(parent)
@@ -137,6 +139,7 @@ class EditorWindow(QMainWindow):
         self._filename = None
         self._bg_item = None
 
+        apply_dark_theme()
         self.setWindowTitle(f"{APP_NAME} — Untitled")
         # Wide enough for the top actions, tall enough for two tool columns.
         self.setMinimumSize(1080, 680)
@@ -182,43 +185,14 @@ class EditorWindow(QMainWindow):
         self._place_tools()
 
     def _setup_ui(self):
-        top_bar = QToolBar("Actions")
-        top_bar.setMovable(False)
-        top_bar.setStyleSheet(with_tooltip_style("""
-            QToolBar { background: #1e1e1e; border: none; spacing: 4px; padding: 4px; }
-            QPushButton {
-                background: #2d2d2d; border: 1px solid #3d3d3d;
-                color: #cccccc; border-radius: 4px;
-                padding: 4px 10px; font-size: 12px;
-            }
-            QPushButton:hover { background: #3d3d3d; }
-        """))
-        self.addToolBar(Qt.ToolBarArea.TopToolBarArea, top_bar)
-
-        def _tb_btn(label, tooltip=""):
-            btn = QPushButton(label)
-            btn.setToolTip(tooltip)
-            btn.setFixedHeight(30)
-            return btn
-
-        self._btn_save_png = _tb_btn("Save PNG", "Save PNG (Ctrl+S)")
-        self._btn_save_jpg = _tb_btn("Save JPG", "Save JPG")
-        self._btn_copy = _tb_btn("Copy", "Copy (Ctrl+C)")
-        self._btn_resize = _tb_btn("Resize…", "Resize canvas")
-        self._btn_rotate = _tb_btn("Rotate", "Rotate image 90°")
-        self._btn_flip = _tb_btn("Flip", "Flip image horizontally")
-        self._btn_border = _tb_btn("Border", "Add a border")
-        self._btn_forward = _tb_btn("Forward", "Bring forward")
-        self._btn_back = _tb_btn("Back", "Send back")
-        self._btn_lock = _tb_btn("Lock", "Lock or unlock the selection")
-        for btn in (
-            self._btn_save_png, self._btn_save_jpg, self._btn_copy, self._btn_resize,
-            self._btn_rotate, self._btn_flip, self._btn_border,
-            self._btn_forward, self._btn_back, self._btn_lock,
-        ):
-            btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-            top_bar.addWidget(btn)
-        self._top_bar = top_bar
+        self._build_menus()
+        options = QToolBar("Tool options")
+        options.setObjectName("ToolOptions")
+        options.setMovable(False)
+        options.setFloatable(False)
+        options.addWidget(self._toolbar.controls_panel)
+        self.addToolBar(Qt.ToolBarArea.TopToolBarArea, options)
+        self._top_bar = options
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -232,24 +206,27 @@ class EditorWindow(QMainWindow):
 
         self._properties = PropertiesPanel()
         self._properties.bind(self._scene, self._toolbar)
-        right = QWidget()
-        right_layout = QVBoxLayout(right)
-        right_layout.setContentsMargins(0, 0, 0, 0)
-        right_layout.setSpacing(0)
-        right_layout.addWidget(self._toolbar.controls_panel)
-        right_layout.addWidget(self._properties, 1)
-        right_scroll = QScrollArea()
-        right_scroll.setWidget(right)
-        right_scroll.setWidgetResizable(True)
-        right_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
-        right_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._swatch_panel = SwatchPanel(self._swatches, self._apply_swatch)
-        self._swatch_panel.setMinimumHeight(200)
-        self._properties_dock = self._dock("Properties", right_scroll)
+        self._colour_panel = QWidget()
+        colour_layout = QVBoxLayout(self._colour_panel)
+        colour_layout.addWidget(QLabel("Pen colour"))
+        self._colour_swatch = QLabel()
+        self._colour_swatch.setFixedHeight(48)
+        colour_layout.addWidget(self._colour_swatch)
+        colour_layout.addStretch(1)
+        self._properties_dock = self._dock("Properties", self._properties)
         self._swatch_dock = self._dock("Swatches", self._swatch_panel)
+        self._colour_dock = self._dock("Colour", self._colour_panel)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self._properties_dock)
-        self.splitDockWidget(self._properties_dock, self._swatch_dock, Qt.Orientation.Vertical)
+        self.tabifyDockWidget(self._properties_dock, self._swatch_dock)
+        self.tabifyDockWidget(self._swatch_dock, self._colour_dock)
+        self._properties_dock.raise_()
+        self._view_menu.addAction("Show Properties", self._properties_dock.show)
+        self._view_menu.addAction("Show Swatches", self._swatch_dock.show)
+        self._view_menu.addAction("Show Colour", self._colour_dock.show)
+        self._refresh_colour_swatch()
         self._place_tools()
+        self._build_status()
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -260,6 +237,135 @@ class EditorWindow(QMainWindow):
             [self._properties_dock, self._swatch_dock],
             [int(height * 0.62), int(height * 0.28)],
             Qt.Orientation.Vertical,
+        )
+
+    def _build_menus(self):
+        bar = self.menuBar()
+        file_menu = bar.addMenu("File")
+        self._file_menu = file_menu
+        file_menu.addAction("New capture", self.new_capture_requested.emit)
+        file_menu.addAction("Open…", self._open_image)
+        self._btn_save_png = file_menu.addAction("Save PNG", self._save_png)
+        self._btn_save_png.setToolTip("Save PNG (Ctrl+S)")
+        file_menu.addAction("Save As JPG", self._save_jpg)
+        self._btn_copy = file_menu.addAction("Copy", self._copy_clipboard)
+        self._btn_copy.setText("Copy")
+        self._btn_copy.setToolTip("Copy (Ctrl+C)")
+        file_menu.addAction("Export…", self._save_png)
+        file_menu.addSeparator()
+        file_menu.addAction("Quit", self.close)
+
+        edit = bar.addMenu("Edit")
+        undo = edit.addAction("Undo")
+        undo.setShortcut(QKeySequence.StandardKey.Undo)
+        undo.triggered.connect(self._scene.undo)
+        redo = edit.addAction("Redo")
+        redo.setShortcut(QKeySequence.StandardKey.Redo)
+        redo.triggered.connect(self._scene.redo)
+        edit.addSeparator()
+        edit.addAction("Cut", self._cut)
+        edit.addAction("Copy", self._copy_clipboard)
+        edit.addAction("Paste", self._scene.paste_clipboard)
+        select_all = edit.addAction("Select all")
+        select_all.setShortcut(QKeySequence("Ctrl+A"))
+        select_all.triggered.connect(self._select_all)
+        edit.addAction("Delete", self._on_delete_shortcut)
+        edit.addAction("Delete all annotations", self._scene.delete_all_annotations)
+
+        image = bar.addMenu("Image")
+        image.addAction("Resize…", self._resize_image)
+        image.addAction("Crop", lambda: self._select_tool("crop"))
+        image.addAction("Rotate 90°", self._rotate_image)
+        image.addAction("Flip horizontally", self._flip_image)
+        image.addAction("Border", self._add_border)
+
+        arrange = bar.addMenu("Arrange")
+        arrange.addAction("Bring forward", self._scene.bring_forward)
+        arrange.addAction("Send backward", self._scene.send_back)
+        arrange.addAction("Bring to front", self._scene.bring_to_front)
+        arrange.addAction("Send to back", self._scene.send_to_back)
+        arrange.addAction("Lock item", self._scene.toggle_lock)
+        arrange.addAction("Renumber all steps in order", self._scene.renumber_steps)
+
+        view = bar.addMenu("View")
+        view.addAction("Zoom in", lambda: self._view.scale(1.15, 1.15))
+        view.addAction("Zoom out", lambda: self._view.scale(1 / 1.15, 1 / 1.15))
+        fit = view.addAction("Fit")
+        fit.setShortcut(QKeySequence("Ctrl+0"))
+        fit.triggered.connect(self._view.fit_scene)
+        actual = view.addAction("100%")
+        actual.setShortcut(QKeySequence("Ctrl+1"))
+        actual.triggered.connect(self._view.resetTransform)
+        self._view_menu = view
+
+        settings = bar.addMenu("Settings")
+        settings.addAction("Auto-copy after capture is in the start window")
+
+        help_menu = bar.addMenu("Help")
+        help_menu.addAction("About ProSnip-Bob", self._about)
+
+    def _build_status(self):
+        status = self.statusBar()
+        self._status_zoom = QLabel("100%")
+        self._status_size = QLabel(f"{self._pil_image.width} × {self._pil_image.height}")
+        self._status_pos = QLabel("x —  y —")
+        self._status_tool = QLabel("Select")
+        for label in (self._status_zoom, self._status_size, self._status_pos, self._status_tool):
+            label.setObjectName("muted")
+            status.addWidget(label)
+        self._view.cursor_moved.connect(self._on_cursor)
+        self._scene.numbers_changed.connect(self._properties._next_spin.setValue)
+        self._scene.number_edit_requested.connect(lambda _item: self._properties.focus_step_editor())
+
+    def _on_cursor(self, pos: QPointF):
+        self._status_pos.setText(f"x {int(pos.x())}  y {int(pos.y())}")
+        zoom = int(round(self._view.transform().m11() * 100))
+        self._status_zoom.setText(f"{zoom}%")
+
+    def _refresh_colour_swatch(self):
+        colour = self._toolbar._pen_color
+        self._colour_swatch.setStyleSheet(
+            f"background: {colour.name()}; border: 1px solid #4a4a4a;"
+        )
+        self._colour_swatch.setToolTip(colour.name())
+
+    def _select_all(self):
+        focus = QApplication.focusWidget()
+        if isinstance(focus, QLineEdit):
+            focus.selectAll()
+            return
+        if isinstance(focus, QAbstractSpinBox) and focus.lineEdit() is not None:
+            focus.lineEdit().selectAll()
+            return
+        if self._view.is_text_editing():
+            item = self._scene.focusItem()
+            if item is not None and hasattr(item, "textCursor"):
+                cursor = item.textCursor()
+                cursor.select(cursor.SelectionType.Document)
+                item.setTextCursor(cursor)
+            return
+        self._scene.select_all_annotations()
+
+    def _cut(self):
+        self._scene.copy_selected()
+        self._scene.delete_selected()
+
+    def _open_image(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Open image", self._history.last_folder,
+            "Images (*.png *.jpg *.jpeg *.bmp *.webp)",
+        )
+        if not path:
+            return
+        image = Image.open(path).convert("RGB")
+        self._replace_pixmap(pil_to_qpixmap(image), image)
+        self._history.set_last_folder(str(Path(path).parent))
+
+    def _about(self):
+        QMessageBox.about(
+            self,
+            f"About {APP_NAME}",
+            f"{APP_NAME}\nVersion {APP_VERSION}\nScreen capture and annotation.",
         )
 
     def _place_tools(self):
@@ -335,17 +441,9 @@ class EditorWindow(QMainWindow):
         self._toolbar.delete_requested.connect(self._scene.delete_selected)
         self._toolbar.stamp_chosen.connect(self._scene.set_last_stamp)
         self._scene.crop_requested.connect(self._on_crop_requested)
-        self._btn_save_png.clicked.connect(self._save_png)
-        self._btn_save_jpg.clicked.connect(self._save_jpg)
-        self._btn_copy.clicked.connect(self._copy_clipboard)
-        self._btn_resize.clicked.connect(self._resize_image)
-        self._btn_rotate.clicked.connect(self._rotate_image)
-        self._btn_flip.clicked.connect(self._flip_image)
-        self._btn_border.clicked.connect(self._add_border)
-        self._btn_forward.clicked.connect(self._scene.bring_forward)
-        self._btn_back.clicked.connect(self._scene.send_back)
-        self._btn_lock.clicked.connect(self._scene.toggle_lock)
         self._toolbar.screen_pick_requested.connect(self.screen_pick_requested.emit)
+        self._toolbar.pen_color_changed.connect(lambda _colour: self._refresh_colour_swatch())
+        self._scene.selectionChanged.connect(self._refresh_status_tool)
 
     def _setup_shortcuts(self):
         QShortcut(QKeySequence("Ctrl+S"), self).activated.connect(self._save_png)
@@ -357,6 +455,7 @@ class EditorWindow(QMainWindow):
         QShortcut(QKeySequence("Ctrl+Y"), self).activated.connect(self._scene.redo)
         QShortcut(QKeySequence("Ctrl+0"), self).activated.connect(self._view.fit_scene)
         QShortcut(QKeySequence("Ctrl+1"), self).activated.connect(self._view.resetTransform)
+        QShortcut(QKeySequence("Ctrl+A"), self).activated.connect(self._select_all)
         for key, tool in (
             ("V", "select"),
             ("A", "arrow"),
@@ -406,10 +505,31 @@ class EditorWindow(QMainWindow):
             return
         self._on_tool_changed(tool)
         self._view.set_select_drag(tool == "select")
+        self._refresh_status_tool()
 
     def _on_tool_changed(self, tool: str):
         self._scene.set_tool(tool)
         self._toolbar.set_tool(tool)
+        self._refresh_status_tool()
+
+    def _refresh_status_tool(self):
+        if getattr(self, "_status_tool", None) is None:
+            return
+        names = {
+            "select": "Select",
+            "arrow": "Arrow",
+            "rect": "Rectangle",
+            "ellipse": "Ellipse",
+            "pen": "Pen",
+            "highlight": "Highlighter",
+            "blur": "Blur",
+            "number": "Numbered step",
+            "text": "Text",
+            "crop": "Crop",
+            "eraser": "Eraser",
+            "screenpick": "Colour picker",
+        }
+        self._status_tool.setText(names.get(self._scene._tool, self._scene._tool))
 
     def _on_style_changed(self, style: QuickStyle):
         self._scene.set_pen_color(style.pen_color)

@@ -11,6 +11,7 @@ import demo_screenshots
 from capture import CaptureOverlay
 from colour_card import show_colour_card
 from editor import APP_NAME, APP_VERSION, EditorWindow
+from theme import apply_dark_theme
 from hotkey import (
     PICK_HOTKEY_ID,
     PICK_HOTKEY_MODIFIERS,
@@ -176,6 +177,7 @@ class ProSnipApp:
         self._app.setQuitOnLastWindowClosed(False)
         self._app.setApplicationName(APP_NAME)
         self._app.setApplicationVersion(APP_VERSION)
+        apply_dark_theme(self._app)
 
         self.forwarded = False
         self._signals = AppSignals()
@@ -486,6 +488,7 @@ class ProSnipApp:
         editor.screen_pick_requested.connect(
             lambda ed=editor: self._show_colour_picker(ed)
         )
+        editor.new_capture_requested.connect(self._show_capture)
         editor.show()
         editor.raise_()
         editor.activateWindow()

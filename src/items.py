@@ -910,12 +910,23 @@ class NumberItem(QGraphicsItem):
         path.addEllipse(self.boundingRect())
         return path
 
+    def set_number(self, number: int) -> None:
+        self.number = max(1, int(number))
+        self.update()
+
+    def mouseDoubleClickEvent(self, event):
+        self.setSelected(True)
+        scene = self.scene()
+        if scene is not None and hasattr(scene, "number_edit_requested"):
+            scene.number_edit_requested.emit(self)
+        event.accept()
+
     def paint(self, painter: QPainter, option, widget=None):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setPen(QPen(QColor("#ffffff"), 2))
         painter.setBrush(QBrush(self.color))
         painter.drawEllipse(0, 0, 36, 36)
         painter.setPen(QPen(QColor("#ffffff")))
-        font = QFont("Arial", 14, QFont.Weight.Bold)
+        font = QFont("Arial", 12 if self.number >= 10 else 14, QFont.Weight.Bold)
         painter.setFont(font)
         painter.drawText(QRectF(0, 0, 36, 36), int(Qt.AlignmentFlag.AlignCenter), str(self.number))

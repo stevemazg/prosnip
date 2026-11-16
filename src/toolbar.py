@@ -277,9 +277,9 @@ class ToolBar(QWidget):
         self._tool_buttons["select"].setChecked(True)
 
         self.controls_panel = QWidget()
-        controls = QVBoxLayout(self.controls_panel)
-        controls.setContentsMargins(8, 8, 8, 4)
-        controls.setSpacing(4)
+        controls = QHBoxLayout(self.controls_panel)
+        controls.setContentsMargins(6, 2, 6, 2)
+        controls.setSpacing(8)
 
         # Quick styles
         lbl_style = QLabel("Style")

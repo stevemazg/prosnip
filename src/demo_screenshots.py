@@ -69,6 +69,9 @@ def capture_demo_screenshots(folder: Path) -> int:
         saved.append(_colour_card(folder / "15-colour-card.png"))
         saved.append(_swatches(folder / "16-swatches.png"))
         saved.append(_no_trails(folder / "17-no-trails.png"))
+        saved.append(_steps_editor(editor, folder / "18-steps.png"))
+        saved.append(_file_menu(editor, folder / "19-file-menu.png"))
+        saved.append(_step_properties(editor, folder / "20-step-properties.png"))
         editor.close()
     except Exception:
         log.exception("Demo screenshots failed")
@@ -297,6 +300,38 @@ def _picker_loupe(path: Path) -> Path:
         return _grab(overlay, path)
     finally:
         overlay.close()
+
+
+def _steps_editor(editor, path: Path) -> Path:
+    from items import NumberItem
+
+    for number, pos in ((1, (70, 90)), (2, (180, 160)), (3, (300, 220))):
+        editor._scene.addItem(NumberItem(number, QPointF(*pos), QColor("#e63946")))
+    editor._scene.sync_next_number()
+    editor._refresh_status_tool()
+    return _grab(editor, path)
+
+
+def _file_menu(editor, path: Path) -> Path:
+    menu = editor._file_menu
+    menu.popup(editor.mapToGlobal(QPoint(8, editor.menuBar().height() + 4)))
+    app = QApplication.instance()
+    if app is not None:
+        app.processEvents()
+    try:
+        return _grab(menu, path)
+    finally:
+        menu.close()
+
+
+def _step_properties(editor, path: Path) -> Path:
+    from items import NumberItem
+
+    step = next(item for item in editor._scene.items() if isinstance(item, NumberItem))
+    step.setSelected(True)
+    editor._properties.refresh()
+    editor._properties_dock.raise_()
+    return _grab(editor, path)
 
 
 def _small_editor(path: Path) -> Path:

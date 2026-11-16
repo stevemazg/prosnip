@@ -22,6 +22,8 @@ class ProSnipScene(QGraphicsScene):
     crop_requested = pyqtSignal(QRectF)
     tool_used = pyqtSignal(object)  # emits the new item added
     colour_picked = pyqtSignal(QColor)
+    numbers_changed = pyqtSignal(int)
+    number_edit_requested = pyqtSignal(object)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -121,6 +123,25 @@ class ProSnipScene(QGraphicsScene):
         self._redo_stack.clear()
         self.tool_used.emit(item)
 
+    def step_numbers(self) -> list[int]:
+        return [
+            item.number
+            for item in self.items()
+            if isinstance(item, NumberItem) and item.parentItem() is None
+        ]
+
+    def suggested_next_number(self) -> int:
+        numbers = self.step_numbers()
+        return (max(numbers) + 1) if numbers else 1
+
+    def set_next_number(self, number: int) -> None:
+        self._next_number = max(1, int(number))
+        self.numbers_changed.emit(self._next_number)
+
+    def sync_next_number(self) -> None:
+        """Next badge is one past the highest number still on the canvas."""
+        self.set_next_number(self.suggested_next_number())
+
     def undo(self):
         if not self._undo_stack:
             return
@@ -130,6 +151,7 @@ class ProSnipScene(QGraphicsScene):
         else:
             self.removeItem(entry)
         self._redo_stack.append(entry)
+        self.sync_next_number()
 
     def redo(self):
         if not self._redo_stack:
@@ -140,6 +162,7 @@ class ProSnipScene(QGraphicsScene):
         else:
             self.addItem(entry)
         self._undo_stack.append(entry)
+        self.sync_next_number()
 
     def copy_selected(self):
         self._clipboard = [item for item in self.selectedItems() if item.parentItem() is None]
@@ -193,13 +216,63 @@ class ProSnipScene(QGraphicsScene):
             item.locked = locked
             item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, not locked)
 
+    def _annotations(self):
+        found = []
+        for item in self.items():
+            if item.parentItem() is not None:
+                continue
+            if isinstance(item, QGraphicsPixmapItem) and item.zValue() < 0:
+                continue
+            found.append(item)
+        return found
+
+    def select_all_annotations(self):
+        self.clearSelection()
+        for item in self._annotations():
+            item.setSelected(True)
+
     def delete_selected(self):
-        for item in self.selectedItems():
-            if item in self._undo_stack:
-                self._undo_stack.remove(item)
-            if item in self._redo_stack:
-                self._redo_stack.remove(item)
+        victims = [
+            item for item in self.selectedItems()
+            if item.parentItem() is None
+            and not (isinstance(item, QGraphicsPixmapItem) and item.zValue() < 0)
+        ]
+        for item in victims:
             self.removeItem(item)
+        if victims:
+            self._undo_stack.append(_RemoveCommand(victims))
+            self._redo_stack.clear()
+        self.sync_next_number()
+
+    def delete_all_annotations(self):
+        victims = self._annotations()
+        for item in victims:
+            self.removeItem(item)
+        if victims:
+            self._undo_stack.append(_RemoveCommand(victims))
+            self._redo_stack.clear()
+        self.sync_next_number()
+
+    def bring_to_front(self):
+        selected = [item for item in self.selectedItems() if item.parentItem() is None]
+        top = max((item.zValue() for item in self.items()), default=0)
+        for item in selected:
+            top += 1
+            item.setZValue(top)
+
+    def send_to_back(self):
+        selected = [item for item in self.selectedItems() if item.parentItem() is None]
+        floor = 0
+        for item in selected:
+            floor -= 1
+            item.setZValue(floor)
+
+    def renumber_steps(self):
+        steps = [item for item in self._annotations() if isinstance(item, NumberItem)]
+        steps.sort(key=lambda item: (item.scenePos().y(), item.scenePos().x()))
+        for index, item in enumerate(steps, start=1):
+            item.set_number(index)
+        self.sync_next_number()
 
     def mousePressEvent(self, event):
         if event.button() != Qt.MouseButton.LeftButton:
@@ -291,9 +364,9 @@ class ProSnipScene(QGraphicsScene):
 
         elif tool == "number":
             item = NumberItem(self._next_number, pos, self._pen_color)
-            self._next_number += 1
             self.addItem(item)
             self._push_undo(item)
+            self.sync_next_number()
             self._current_item = None
             event.accept()
 
@@ -458,6 +531,8 @@ class _CanvasViewport(QWidget):
 
 
 class ProSnipView(QGraphicsView):
+    cursor_moved = pyqtSignal(QPointF)
+
     def __init__(self, scene: ProSnipScene, parent=None):
         super().__init__(scene, parent)
         self.setViewport(_CanvasViewport(self))
@@ -533,10 +608,15 @@ class ProSnipView(QGraphicsView):
             return
         super().keyReleaseEvent(event)
 
+    def mouseMoveEvent(self, event):
+        super().mouseMoveEvent(event)
+        self.cursor_moved.emit(self.mapToScene(event.position().toPoint()))
+
     def wheelEvent(self, event):
         if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
             factor = 1.15 if event.angleDelta().y() > 0 else 1 / 1.15
             self.scale(factor, factor)
+            self.cursor_moved.emit(self.mapToScene(event.position().toPoint()))
             event.accept()
             return
         super().wheelEvent(event)

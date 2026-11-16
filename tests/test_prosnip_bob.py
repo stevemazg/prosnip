@@ -349,7 +349,7 @@ class LauncherTests(unittest.TestCase):
         labels = [label.text() for label in window.findChildren(main_window.QLabel)]
         self.assertIn("ProSnip-Bob", labels)
         self.assertIn(f"Version {editor.APP_VERSION}", labels)
-        self.assertEqual(editor.APP_VERSION, "1.5.2.0")
+        self.assertEqual(editor.APP_VERSION, "1.6.0.0")
         self.assertEqual(window.new_capture_button.text(), "New Capture")
         self.assertEqual(window.quit_button.text(), "Quit")
         self.assertIn("this system", window.shortcut_label.text())
@@ -631,8 +631,8 @@ class AppTests(unittest.TestCase):
             "Steve Maz",
             "ProSnip-Bob",
             "ProSnip-Bob screen capture and annotation tool",
-            "1.5.2.0",
-            "(1, 5, 2, 0)",
+            "1.6.0.0",
+            "(1, 6, 0, 0)",
             "ProSnip-Bob.exe",
             "Copyright (C) 2026 Steve Maz",
         ):
@@ -903,6 +903,54 @@ class EditorLayoutTests(unittest.TestCase):
         canvas = window._view.mapTo(window, window._view.rect().topLeft())
         self.assertLess(panel.x(), canvas.x())
         self.assertEqual(len(window._toolbar._tool_buttons), 16)
+
+    def test_step_numbers_follow_the_badges_on_the_canvas(self):
+        scene = canvas.ProSnipScene()
+        scene.set_tool("number")
+
+        class _Event:
+            def __init__(self, x, y):
+                self._pos = QPointF(x, y)
+
+            def button(self):
+                return Qt.MouseButton.LeftButton
+
+            def scenePos(self):
+                return self._pos
+
+            def accept(self):
+                return None
+
+        for x in (10, 40, 70, 100, 130, 160):
+            scene.mousePressEvent(_Event(x, 20))
+        numbers = sorted(item.number for item in scene.items() if isinstance(item, items.NumberItem))
+        self.assertEqual(numbers, [1, 2, 3, 4, 5, 6])
+        self.assertEqual(scene._next_number, 7)
+        scene.undo()
+        numbers = sorted(item.number for item in scene.items() if isinstance(item, items.NumberItem))
+        self.assertEqual(numbers, [1, 2, 3, 4, 5])
+        self.assertEqual(scene._next_number, 6)
+        scene.delete_all_annotations()
+        self.assertEqual(scene.step_numbers(), [])
+        self.assertEqual(scene._next_number, 1)
+        scene.set_next_number(4)
+        scene.mousePressEvent(_Event(20, 40))
+        self.assertEqual(scene.step_numbers(), [4])
+        scene.renumber_steps()
+        self.assertEqual(scene.step_numbers(), [1])
+        self.assertEqual(scene._next_number, 2)
+
+    def test_text_and_panel_contrast(self):
+        from theme import MUTED, PANEL, RAISED, TEXT, WINDOW, apply_dark_theme, contrast_ratio
+
+        apply_dark_theme()
+        for foreground, background in (
+            (TEXT, WINDOW),
+            (TEXT, PANEL),
+            (TEXT, RAISED),
+            (MUTED, WINDOW),
+        ):
+            self.assertGreaterEqual(contrast_ratio(foreground, background), 4.5)
 
     def test_pen_width_is_inside_the_bounding_rect(self):
         rect = items.RectItem(QRectF(10, 10, 80, 40), QColor("#e63946"), QColor(0, 0, 0, 0), 16)

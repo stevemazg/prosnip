@@ -66,7 +66,10 @@ jobs:
             "14-editor-small.png",
             "15-colour-card.png",
             "16-swatches.png",
-            "17-no-trails.png"
+            "17-no-trails.png",
+            "18-steps.png",
+            "19-file-menu.png",
+            "20-step-properties.png"
           )) {
             $file = Join-Path screenshots $name
             if (-not (Test-Path $file)) { throw "Missing $name" }
