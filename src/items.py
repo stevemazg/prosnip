@@ -2,12 +2,13 @@ import math
 from enum import IntEnum
 
 from PyQt6.QtWidgets import (
-    QGraphicsItem, QGraphicsRectItem, QGraphicsEllipseItem,
-    QGraphicsTextItem, QGraphicsPixmapItem, QGraphicsSceneMouseEvent
+    QGraphicsDropShadowEffect, QGraphicsItem, QGraphicsRectItem,
+    QGraphicsEllipseItem, QGraphicsTextItem, QGraphicsPixmapItem,
+    QGraphicsSceneMouseEvent,
 )
 from PyQt6.QtGui import (
     QPainter, QPen, QBrush, QColor, QFont, QPainterPath,
-    QTextDocument, QTextCursor, QPixmap, QTransform
+    QTextDocument, QTextCursor, QPixmap, QTransform, QPainterPathStroker
 )
 from PyQt6.QtCore import Qt, QRectF, QPointF, QSizeF
 
@@ -28,6 +29,35 @@ class HandlePos(IntEnum):
 
 HANDLE_SIZE = 8
 HANDLE_HALF = HANDLE_SIZE / 2
+END_CAPS = ("none", "arrow", "dot", "square")
+
+
+def apply_shadow(item) -> None:
+    """Per-annotation drop shadow. Off leaves the item with no effect."""
+    enabled = bool(getattr(item, "shadow_enabled", False))
+    if not enabled:
+        if item.graphicsEffect() is not None:
+            item.setGraphicsEffect(None)
+        return
+    effect = QGraphicsDropShadowEffect()
+    offset = max(0, int(getattr(item, "shadow_offset", 4)))
+    blur = max(0, int(getattr(item, "shadow_blur", 8)))
+    effect.setOffset(offset, offset)
+    effect.setBlurRadius(blur)
+    effect.setColor(QColor(0, 0, 0, 150))
+    item.setGraphicsEffect(effect)
+
+
+def item_is_text_editing(item) -> bool:
+    """True when ``item`` is a text box currently accepting keyboard edits.
+
+    Stamps are also text items, but they never turn on text interaction, so
+    Delete still removes a selected stamp.
+    """
+    if not isinstance(item, QGraphicsTextItem):
+        return False
+    flags = item.textInteractionFlags()
+    return bool(flags & Qt.TextInteractionFlag.TextEditorInteraction)
 
 
 def _handle_color():
@@ -71,6 +101,38 @@ class ResizeHandle(QGraphicsRectItem):
 # ---------------------------------------------------------------------------
 # Mixin: adds 8 resize handles to a rect-based item
 # ---------------------------------------------------------------------------
+class RotateHandle(QGraphicsEllipseItem):
+    """Drag to rotate the parent around its centre."""
+
+    def __init__(self, parent_item):
+        super().__init__(-6, -6, 12, 12, parent_item)
+        self.parent_item = parent_item
+        self.setBrush(QBrush(QColor("#0078d4")))
+        self.setPen(QPen(QColor("#ffffff"), 1))
+        self.setZValue(1001)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, False)
+
+    def mousePressEvent(self, event):
+        event.accept()
+
+    def mouseMoveEvent(self, event):
+        parent = self.parent_item
+        if getattr(parent, "locked", False):
+            event.accept()
+            return
+        origin = parent._get_rect().center() if hasattr(parent, "_get_rect") else parent.boundingRect().center()
+        parent.setTransformOriginPoint(origin)
+        centre = parent.mapToScene(origin)
+        pos = event.scenePos()
+        angle = math.degrees(math.atan2(pos.y() - centre.y(), pos.x() - centre.x())) + 90
+        parent.prepareGeometryChange()
+        parent.setRotation(angle)
+        event.accept()
+
+    def mouseReleaseEvent(self, event):
+        event.accept()
+
+
 class ResizableMixin:
     """Mixin for items that have a rect and support 8-handle resizing."""
 
@@ -94,6 +156,18 @@ class ResizableMixin:
         positions = self._handle_positions(r)
         for h, pos in zip(self.handles, positions):
             h.setPos(pos)
+        if getattr(self, "_rotate_handle", None) is not None:
+            self._rotate_handle.setPos(r.center().x(), r.top() - 22)
+
+    def _init_rotate_handle(self):
+        self._rotate_handle = RotateHandle(self)
+        self._rotate_handle.setVisible(False)
+
+    def _show_handles(self, visible: bool):
+        for h in self.handles:
+            h.setVisible(visible and not getattr(self, "locked", False))
+        if getattr(self, "_rotate_handle", None) is not None:
+            self._rotate_handle.setVisible(visible and not getattr(self, "locked", False))
 
     def _handle_positions(self, r: QRectF):
         cx = r.center().x()
@@ -168,24 +242,49 @@ class ResizableMixin:
 class RectItem(ResizableMixin, QGraphicsRectItem):
     def __init__(self, rect: QRectF, pen_color: QColor, fill_color: QColor, line_width: int):
         super().__init__(rect)
-        self.pen_color = pen_color
-        self.fill_color = fill_color
+        self.pen_color = QColor(pen_color)
+        self.fill_color = QColor(fill_color)
         self.line_width = line_width
+        self.stroke_enabled = True
         self._apply_style()
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, True)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges, True)
+        self.corner_radius = 0
+        self.locked = False
         self._init_handles()
+        self._init_rotate_handle()
 
     def _apply_style(self):
-        pen = QPen(self.pen_color, self.line_width)
-        self.setPen(pen)
+        if self.stroke_enabled and self.line_width > 0:
+            self.setPen(QPen(self.pen_color, self.line_width))
+        else:
+            self.setPen(QPen(Qt.PenStyle.NoPen))
         self.setBrush(QBrush(self.fill_color))
+
+    def boundingRect(self) -> QRectF:
+        pad = self.line_width / 2.0 + HANDLE_HALF + 28
+        return self.rect().adjusted(-pad, -pad, pad, pad)
+
+    def shape(self) -> QPainterPath:
+        path = QPainterPath()
+        path.addRect(self.rect().adjusted(-self.line_width, -self.line_width, self.line_width, self.line_width))
+        return path
+
+    def paint(self, painter: QPainter, option, widget=None):
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(self.pen())
+        painter.setBrush(self.brush())
+        if self.corner_radius > 0:
+            painter.drawRoundedRect(self.rect(), self.corner_radius, self.corner_radius)
+        else:
+            painter.drawRect(self.rect())
 
     def _get_rect(self) -> QRectF:
         return self.rect()
 
     def _set_rect(self, r: QRectF):
+        self.prepareGeometryChange()
         self.setRect(r)
 
     def itemChange(self, change, value):
@@ -198,24 +297,39 @@ class RectItem(ResizableMixin, QGraphicsRectItem):
 class EllipseItem(ResizableMixin, QGraphicsEllipseItem):
     def __init__(self, rect: QRectF, pen_color: QColor, fill_color: QColor, line_width: int):
         super().__init__(rect)
-        self.pen_color = pen_color
-        self.fill_color = fill_color
+        self.pen_color = QColor(pen_color)
+        self.fill_color = QColor(fill_color)
         self.line_width = line_width
+        self.stroke_enabled = True
         self._apply_style()
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, True)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges, True)
+        self.locked = False
         self._init_handles()
+        self._init_rotate_handle()
 
     def _apply_style(self):
-        pen = QPen(self.pen_color, self.line_width)
-        self.setPen(pen)
+        if self.stroke_enabled and self.line_width > 0:
+            self.setPen(QPen(self.pen_color, self.line_width))
+        else:
+            self.setPen(QPen(Qt.PenStyle.NoPen))
         self.setBrush(QBrush(self.fill_color))
+
+    def boundingRect(self) -> QRectF:
+        pad = self.line_width / 2.0 + HANDLE_HALF + 28
+        return self.rect().adjusted(-pad, -pad, pad, pad)
+
+    def shape(self) -> QPainterPath:
+        path = QPainterPath()
+        path.addEllipse(self.rect().adjusted(-self.line_width, -self.line_width, self.line_width, self.line_width))
+        return path
 
     def _get_rect(self) -> QRectF:
         return self.rect()
 
     def _set_rect(self, r: QRectF):
+        self.prepareGeometryChange()
         self.setRect(r)
 
     def itemChange(self, change, value):
@@ -225,13 +339,20 @@ class EllipseItem(ResizableMixin, QGraphicsEllipseItem):
 # ---------------------------------------------------------------------------
 # ArrowItem
 # ---------------------------------------------------------------------------
+ARROW_STYLES = ("plain", "dashed", "dotted", "double", "tapered", "curved")
+
+
 class ArrowItem(QGraphicsItem):
-    def __init__(self, start: QPointF, end: QPointF, pen_color: QColor, line_width: int):
+    def __init__(self, start: QPointF, end: QPointF, pen_color: QColor, line_width: int, style: str = "plain"):
         super().__init__()
         self.start = QPointF(start)
         self.end = QPointF(end)
-        self.pen_color = pen_color
-        self.line_width = line_width
+        self.pen_color = QColor(pen_color)
+        self.line_width = max(1, int(line_width))
+        self.style = style if style in ARROW_STYLES else "plain"
+        self.start_cap = "none"
+        self.end_cap = "arrow"
+        self.stroke_enabled = True
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, True)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges, True)
@@ -257,40 +378,123 @@ class ArrowItem(QGraphicsItem):
                 h.setPos(self.end)
 
     def boundingRect(self) -> QRectF:
-        extra = (self.line_width + 20) / 2.0
-        return QRectF(self.start, self.end).normalized().adjusted(-extra, -extra, extra, extra)
+        rect = QRectF(self.start, self.end).normalized()
+        if self.style == "curved":
+            control = self._curve_control()
+            rect = rect.united(QRectF(control, control))
+        extra = self.line_width + HANDLE_HALF + 28
+        return rect.adjusted(-extra, -extra, extra, extra)
 
-    def paint(self, painter: QPainter, option, widget=None):
-        pen = QPen(self.pen_color, self.line_width, Qt.PenStyle.SolidLine,
-                   Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
-        painter.setPen(pen)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.drawLine(self.start, self.end)
+    def shape(self) -> QPainterPath:
+        path = QPainterPath()
+        path.addRect(self.boundingRect())
+        return path
 
-        # Draw arrowhead
-        head_size = 12 + self.line_width * 2
-        dx = self.end.x() - self.start.x()
-        dy = self.end.y() - self.start.y()
+    def _direction(self, origin: QPointF, target: QPointF):
+        dx = target.x() - origin.x()
+        dy = target.y() - origin.y()
         length = math.hypot(dx, dy)
         if length < 1:
+            return 0.0, 0.0, 0.0
+        return dx / length, dy / length, length
+
+    def _curve_control(self) -> QPointF:
+        ux, uy, length = self._direction(self.start, self.end)
+        if length < 1:
+            return QPointF(self.start)
+        mid_x = (self.start.x() + self.end.x()) / 2.0
+        mid_y = (self.start.y() + self.end.y()) / 2.0
+        bend = max(24.0, length * 0.28)
+        return QPointF(mid_x - uy * bend, mid_y + ux * bend)
+
+    def _draw_head(self, painter: QPainter, origin: QPointF, tip: QPointF):
+        ux, uy, length = self._direction(origin, tip)
+        if length < 1:
             return
-        ux, uy = dx / length, dy / length
-        px, py = -uy, ux  # perpendicular
-
-        tip = self.end
-        base1 = QPointF(tip.x() - ux * head_size + px * head_size * 0.4,
-                        tip.y() - uy * head_size + py * head_size * 0.4)
-        base2 = QPointF(tip.x() - ux * head_size - px * head_size * 0.4,
-                        tip.y() - uy * head_size - py * head_size * 0.4)
-
+        head = 10 + self.line_width * 2.4
+        px, py = -uy, ux
+        base1 = QPointF(tip.x() - ux * head + px * head * 0.42, tip.y() - uy * head + py * head * 0.42)
+        base2 = QPointF(tip.x() - ux * head - px * head * 0.42, tip.y() - uy * head - py * head * 0.42)
         path = QPainterPath()
         path.moveTo(tip)
         path.lineTo(base1)
         path.lineTo(base2)
         path.closeSubpath()
+        painter.setPen(QPen(Qt.PenStyle.NoPen))
         painter.setBrush(QBrush(self.pen_color))
-        painter.setPen(Qt.PenStyle.NoPen)
         painter.drawPath(path)
+
+    def paint(self, painter: QPainter, option, widget=None):
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        if not self.stroke_enabled:
+            return
+        if self.style == "tapered":
+            ux, uy, length = self._direction(self.start, self.end)
+            if length < 1:
+                return
+            px, py = -uy, ux
+            head_len = min(length * 0.36, 18.0 + self.line_width * 3.0)
+            neck = QPointF(self.end.x() - ux * head_len, self.end.y() - uy * head_len)
+            tail_half = max(1.25, self.line_width * 0.28)
+            neck_half = max(tail_half + 3.0, self.line_width * 0.95)
+            head_half = neck_half + max(7.0, self.line_width * 1.2)
+            shaft = QPainterPath()
+            shaft.moveTo(QPointF(self.start.x() + px * tail_half, self.start.y() + py * tail_half))
+            shaft.lineTo(QPointF(neck.x() + px * neck_half, neck.y() + py * neck_half))
+            shaft.lineTo(QPointF(neck.x() - px * neck_half, neck.y() - py * neck_half))
+            shaft.lineTo(QPointF(self.start.x() - px * tail_half, self.start.y() - py * tail_half))
+            shaft.closeSubpath()
+            head = QPainterPath()
+            head.moveTo(self.end)
+            head.lineTo(QPointF(neck.x() + px * head_half, neck.y() + py * head_half))
+            head.lineTo(QPointF(neck.x() - px * head_half, neck.y() - py * head_half))
+            head.closeSubpath()
+            painter.setPen(QPen(Qt.PenStyle.NoPen))
+            painter.setBrush(QBrush(self.pen_color))
+            painter.drawPath(shaft)
+            painter.drawPath(head)
+            return
+
+        pen = QPen(self.pen_color, self.line_width, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
+        if self.style == "dashed":
+            pen.setStyle(Qt.PenStyle.DashLine)
+        elif self.style == "dotted":
+            pen.setStyle(Qt.PenStyle.DotLine)
+        painter.setPen(pen)
+        painter.setBrush(QBrush(Qt.BrushStyle.NoBrush))
+        start_cap = self.start_cap if self.start_cap in END_CAPS else "none"
+        end_cap = self.end_cap if self.end_cap in END_CAPS else "arrow"
+        if self.style == "double" and start_cap == "none":
+            start_cap = "arrow"
+        if self.style == "curved":
+            path = QPainterPath()
+            path.moveTo(self.start)
+            control = self._curve_control()
+            path.quadTo(control, self.end)
+            painter.drawPath(path)
+            self._draw_cap(painter, control, self.end, end_cap)
+            self._draw_cap(painter, control, self.start, start_cap)
+        else:
+            painter.drawLine(self.start, self.end)
+            self._draw_cap(painter, self.start, self.end, end_cap)
+            self._draw_cap(painter, self.end, self.start, start_cap)
+
+    def _draw_cap(self, painter: QPainter, origin: QPointF, tip: QPointF, kind: str):
+        if kind == "arrow":
+            self._draw_head(painter, origin, tip)
+            return
+        if kind not in {"dot", "square"}:
+            return
+        ux, uy, length = self._direction(origin, tip)
+        if length < 1:
+            return
+        size = max(4.0, self.line_width * 1.6)
+        painter.setPen(QPen(Qt.PenStyle.NoPen))
+        painter.setBrush(QBrush(self.pen_color))
+        if kind == "dot":
+            painter.drawEllipse(QRectF(tip.x() - size, tip.y() - size, size * 2, size * 2))
+            return
+        painter.drawRect(QRectF(tip.x() - size, tip.y() - size, size * 2, size * 2))
 
     def _start_resize(self, pos_index: int, scene_pos: QPointF):
         self._resizing = True
@@ -328,6 +532,10 @@ class TextItem(QGraphicsTextItem):
         self.setFont(font)
         self.setDefaultTextColor(text_color)
         self.setPos(pos)
+        self.bg_color = QColor(0, 0, 0, 0)
+        self.outline_enabled = False
+        self.outline_color = QColor("#111111")
+        self.outline_width = 2
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, True)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
         self.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
@@ -344,14 +552,44 @@ class TextItem(QGraphicsTextItem):
         self.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
         super().focusOutEvent(event)
 
+    def set_bold(self, bold: bool) -> None:
+        font = self.font()
+        font.setBold(bool(bold))
+        self.setFont(font)
+
+    def keyPressEvent(self, event):
+        super().keyPressEvent(event)
+        # Swallow the key while editing so it cannot bubble out and delete
+        # the item the user is typing in.
+        if item_is_text_editing(self) and event.key() in (
+            Qt.Key.Key_Delete,
+            Qt.Key.Key_Backspace,
+        ):
+            event.accept()
+
     def paint(self, painter: QPainter, option, widget=None):
-        # Draw faint border
-        r = self.boundingRect()
         painter.save()
-        pen = QPen(QColor(180, 180, 180, 120), 1, Qt.PenStyle.DashLine)
-        painter.setPen(pen)
-        painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.drawRoundedRect(r.adjusted(1, 1, -1, -1), 4, 4)
+        rect = self.boundingRect()
+        if self.bg_color.alpha() > 0:
+            painter.setPen(QPen(Qt.PenStyle.NoPen))
+            painter.setBrush(QBrush(self.bg_color))
+            painter.drawRoundedRect(rect.adjusted(1, 1, -1, -1), 4, 4)
+        if self.outline_enabled and self.outline_width > 0 and self.toPlainText():
+            path = QPainterPath()
+            painter.setFont(self.font())
+            metrics = painter.fontMetrics()
+            y = float(metrics.ascent())
+            for line in self.toPlainText().split("\n"):
+                path.addText(QPointF(0, y), self.font(), line)
+                y += metrics.lineSpacing()
+            painter.setPen(QPen(self.outline_color, self.outline_width, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+            painter.setBrush(QBrush(Qt.BrushStyle.NoBrush))
+            painter.drawPath(path)
+        else:
+            pen = QPen(QColor(180, 180, 180, 120), 1, Qt.PenStyle.DashLine)
+            painter.setPen(pen)
+            painter.setBrush(QBrush(Qt.BrushStyle.NoBrush))
+            painter.drawRoundedRect(rect.adjusted(1, 1, -1, -1), 4, 4)
         painter.restore()
         super().paint(painter, option, widget)
 
@@ -366,11 +604,12 @@ class CalloutItem(QGraphicsItem):
     def __init__(self, pos: QPointF, pen_color: QColor, fill_color: QColor,
                  text_color: QColor, line_width: int, font_size: int):
         super().__init__()
-        self.pen_color = pen_color
-        self.fill_color = fill_color
-        self.text_color = text_color
+        self.pen_color = QColor(pen_color)
+        self.fill_color = QColor(fill_color)
+        self.text_color = QColor(text_color)
         self.line_width = line_width
         self.font_size = font_size
+        self.stroke_enabled = True
         self._rect = QRectF(0, 0, self.DEFAULT_W, self.DEFAULT_H)
         self._text = "Callout"
         self._editing = False
@@ -417,7 +656,13 @@ class CalloutItem(QGraphicsItem):
 
     def boundingRect(self) -> QRectF:
         pointer_h = 16
-        return self._rect.adjusted(-2, -2, 2, pointer_h + 2)
+        pad = self.line_width / 2.0 + HANDLE_HALF + 8
+        return self._rect.adjusted(-pad, -pad, pad, pointer_h + pad)
+
+    def shape(self) -> QPainterPath:
+        path = QPainterPath()
+        path.addRect(self.boundingRect())
+        return path
 
     def paint(self, painter: QPainter, option, widget=None):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -434,7 +679,10 @@ class CalloutItem(QGraphicsItem):
         path.lineTo(ptr_base_x + 20, r.bottom())
         path.closeSubpath()
 
-        pen = QPen(self.pen_color, self.line_width)
+        if self.stroke_enabled and self.line_width > 0:
+            pen = QPen(self.pen_color, self.line_width)
+        else:
+            pen = QPen(Qt.PenStyle.NoPen)
         painter.setPen(pen)
         painter.setBrush(QBrush(self.fill_color))
         painter.drawPath(path)
@@ -538,7 +786,17 @@ class ImageOverlayItem(ResizableMixin, QGraphicsPixmapItem):
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, True)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges, True)
+        self.stroke_enabled = False
+        self.pen_color = QColor("#ffffff")
+        self.line_width = 2
         self._init_handles()
+
+    def paint(self, painter: QPainter, option, widget=None):
+        super().paint(painter, option, widget)
+        if self.stroke_enabled and self.line_width > 0:
+            painter.setPen(QPen(self.pen_color, self.line_width))
+            painter.setBrush(QBrush(Qt.BrushStyle.NoBrush))
+            painter.drawRect(self.boundingRect())
 
     def _get_rect(self) -> QRectF:
         return self._current_rect
@@ -554,3 +812,231 @@ class ImageOverlayItem(ResizableMixin, QGraphicsPixmapItem):
 
     def itemChange(self, change, value):
         return ResizableMixin.itemChange(self, change, value)
+
+
+class StrokeItem(QGraphicsItem):
+    """One freehand stroke. Points stay in the item's local coordinates."""
+
+    def __init__(self, color: QColor, width: int, highlighter: bool = False):
+        super().__init__()
+        self.highlighter = highlighter
+        self.line_width = max(1, int(width))
+        self.pen_color = QColor(color)
+        if highlighter:
+            self.pen_color.setAlpha(96)
+            self.line_width = max(self.line_width, 12)
+        self._points: list[QPointF] = []
+        self._path = QPainterPath()
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, True)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges, True)
+
+    def add_point(self, point: QPointF) -> None:
+        self.prepareGeometryChange()
+        self._points.append(QPointF(point))
+        self._rebuild()
+        self.update()
+
+    def _rebuild(self) -> None:
+        points = self._points
+        path = QPainterPath()
+        if not points:
+            self._path = path
+            return
+        path.moveTo(points[0])
+        if len(points) == 2:
+            path.lineTo(points[1])
+        elif len(points) > 2:
+            for index in range(1, len(points) - 1):
+                current = points[index]
+                nxt = points[index + 1]
+                mid = QPointF(
+                    (current.x() + nxt.x()) / 2.0,
+                    (current.y() + nxt.y()) / 2.0,
+                )
+                path.quadTo(current, mid)
+            path.lineTo(points[-1])
+        self._path = path
+
+    def boundingRect(self) -> QRectF:
+        extra = self.line_width / 2.0 + 8.0
+        return self._path.boundingRect().adjusted(-extra, -extra, extra, extra)
+
+    def shape(self) -> QPainterPath:
+        stroker = QPainterPathStroker()
+        stroker.setWidth(self.line_width + 8)
+        if self._path.isEmpty():
+            return self._path
+        return stroker.createStroke(self._path)
+
+    def paint(self, painter: QPainter, option, widget=None):
+        pen = QPen(
+            self.pen_color,
+            self.line_width,
+            Qt.PenStyle.SolidLine,
+            Qt.PenCapStyle.RoundCap,
+            Qt.PenJoinStyle.RoundJoin,
+        )
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(pen)
+        painter.setBrush(QBrush(Qt.BrushStyle.NoBrush))
+        if len(self._points) == 1:
+            painter.drawPoint(self._points[0])
+        elif len(self._points) > 1:
+            painter.drawPath(self._path)
+
+
+class BlurItem(QGraphicsRectItem):
+    """Pixelate the picture underneath. Used to redact part of a snip."""
+
+    def __init__(self, rect: QRectF, block: int = 14):
+        super().__init__(rect)
+        self.block = max(4, int(block))
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, True)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges, True)
+        self.setPen(QPen(Qt.PenStyle.NoPen))
+        self.setBrush(QBrush(Qt.BrushStyle.NoBrush))
+
+    def boundingRect(self) -> QRectF:
+        return QGraphicsRectItem.boundingRect(self).adjusted(-2, -2, 2, 2)
+
+    def paint(self, painter: QPainter, option, widget=None):
+        scene = self.scene()
+        background = None
+        if scene is not None:
+            for item in scene.items():
+                if isinstance(item, QGraphicsPixmapItem) and item.zValue() < 0:
+                    background = item
+                    break
+        rect = self.rect().normalized()
+        block = self.block
+        painter.setPen(QPen(Qt.PenStyle.NoPen))
+        if background is None:
+            painter.setBrush(QBrush(QColor(80, 80, 80)))
+            painter.drawRect(rect)
+            return
+        image = background.pixmap().toImage()
+        y = int(rect.top())
+        while y < rect.bottom():
+            x = int(rect.left())
+            while x < rect.right():
+                scene_point = self.mapToScene(QPointF(x + block / 2, y + block / 2))
+                local = background.mapFromScene(scene_point)
+                px = max(0, min(image.width() - 1, int(local.x())))
+                py = max(0, min(image.height() - 1, int(local.y())))
+                painter.setBrush(QBrush(image.pixelColor(px, py)))
+                painter.drawRect(x, y, block, block)
+                x += block
+            y += block
+
+
+class NumberItem(QGraphicsItem):
+    """A numbered step marker."""
+
+    def __init__(self, number: int, pos: QPointF, color: QColor):
+        super().__init__()
+        self.number = max(1, int(number))
+        self.color = QColor(color)
+        self.setPos(pos)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, True)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges, True)
+
+    def boundingRect(self) -> QRectF:
+        return QRectF(-4, -4, 44, 44)
+
+    def shape(self) -> QPainterPath:
+        path = QPainterPath()
+        path.addEllipse(self.boundingRect())
+        return path
+
+    def set_number(self, number: int) -> None:
+        self.number = max(1, int(number))
+        self.update()
+
+    def mouseDoubleClickEvent(self, event):
+        self.setSelected(True)
+        scene = self.scene()
+        if scene is not None and hasattr(scene, "number_edit_requested"):
+            scene.number_edit_requested.emit(self)
+        event.accept()
+
+    def paint(self, painter: QPainter, option, widget=None):
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(QPen(QColor("#ffffff"), 2))
+        painter.setBrush(QBrush(self.color))
+        painter.drawEllipse(0, 0, 36, 36)
+        painter.setPen(QPen(QColor("#ffffff")))
+        font = QFont("Arial", 12 if self.number >= 10 else 14, QFont.Weight.Bold)
+        painter.setFont(font)
+        painter.drawText(QRectF(0, 0, 36, 36), int(Qt.AlignmentFlag.AlignCenter), str(self.number))
+
+
+class PolygonItem(QGraphicsItem):
+    """A closed polygon. Points are local to the item."""
+
+    def __init__(self, points, pen_color: QColor, fill_color: QColor, line_width: int):
+        super().__init__()
+        self.points = [QPointF(point) for point in points]
+        self.pen_color = QColor(pen_color)
+        self.fill_color = QColor(fill_color)
+        self.line_width = max(1, int(line_width))
+        self.stroke_enabled = True
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, True)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges, True)
+
+    def _path(self) -> QPainterPath:
+        path = QPainterPath()
+        if not self.points:
+            return path
+        path.moveTo(self.points[0])
+        for point in self.points[1:]:
+            path.lineTo(point)
+        path.closeSubpath()
+        return path
+
+    def boundingRect(self) -> QRectF:
+        extra = self.line_width / 2.0 + 8.0
+        return self._path().boundingRect().adjusted(-extra, -extra, extra, extra)
+
+    def shape(self) -> QPainterPath:
+        stroker = QPainterPathStroker()
+        stroker.setWidth(self.line_width + 8)
+        return stroker.createStroke(self._path())
+
+    def paint(self, painter: QPainter, option, widget=None):
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        pen = QPen(self.pen_color, self.line_width) if self.stroke_enabled else QPen(Qt.PenStyle.NoPen)
+        painter.setPen(pen)
+        painter.setBrush(QBrush(self.fill_color))
+        painter.drawPath(self._path())
+
+
+class SpotlightItem(RectItem):
+    """Darken everything outside the selected rectangle."""
+
+    def __init__(self, rect: QRectF, darkness: int = 140):
+        super().__init__(rect, QColor("#ffffff"), QColor(0, 0, 0, 0), 2)
+        self.darkness = max(0, min(220, int(darkness)))
+
+    def boundingRect(self) -> QRectF:
+        return self.rect().adjusted(-4000, -4000, 4000, 4000)
+
+    def shape(self) -> QPainterPath:
+        path = QPainterPath()
+        path.addRect(self.rect().adjusted(-6, -6, 6, 6))
+        return path
+
+    def paint(self, painter: QPainter, option, widget=None):
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        outer = self.boundingRect()
+        cover = QPainterPath()
+        cover.addRect(outer)
+        hole = QPainterPath()
+        hole.addRect(self.rect())
+        painter.fillPath(cover.subtracted(hole), QColor(0, 0, 0, self.darkness))
+        painter.setPen(QPen(QColor(255, 255, 255, 200), 1.5))
+        painter.setBrush(QBrush(Qt.BrushStyle.NoBrush))
+        painter.drawRect(self.rect())
