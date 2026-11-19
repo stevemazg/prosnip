@@ -1,7 +1,7 @@
 """Top editor toolbar: navigation, tools, and save. Our own icons."""
 
 from PyQt6.QtCore import QPoint, QSize, Qt, pyqtSignal
-from PyQt6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
+from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QDialog,
     QHBoxLayout,
@@ -10,9 +10,12 @@ from PyQt6.QtWidgets import (
     QMenu,
     QPushButton,
     QSizePolicy,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
+
+from icons import tool_icon
 
 DEFAULT_ORDER = ["favourites", "arrow", "text", "callout", "rect", "stamp", "fill", "select"]
 MORE_LIVE = ["crop", "pen", "highlight", "number", "eraser", "blur", "ellipse", "image", "screenpick", "pick"]
@@ -43,31 +46,49 @@ LABELS = {
 }
 
 
-def _icon(kind: str, colour: str = "#3d4750") -> QIcon:
-    pix = QPixmap(32, 32)
-    pix.fill(Qt.GlobalColor.transparent)
-    painter = QPainter(pix)
-    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    pen = QPen(QColor(colour), 2)
-    painter.setPen(pen)
-    if kind == "arrow":
-        painter.drawLine(6, 26, 24, 8)
-        painter.drawLine(24, 8, 16, 10)
-        painter.drawLine(24, 8, 22, 16)
-    elif kind == "text":
-        painter.drawText(pix.rect(), int(Qt.AlignmentFlag.AlignCenter), "a")
-    elif kind == "callout":
-        painter.drawRoundedRect(4, 6, 22, 14, 3, 3)
-        painter.drawLine(10, 20, 8, 26)
-    elif kind == "rect":
-        painter.drawRect(6, 8, 18, 14)
-        painter.drawEllipse(12, 12, 12, 12)
-    elif kind == "star":
-        painter.drawText(pix.rect(), int(Qt.AlignmentFlag.AlignCenter), "★")
-    else:
-        painter.drawText(pix.rect(), int(Qt.AlignmentFlag.AlignCenter), kind[:1].upper())
-    painter.end()
-    return QIcon(pix)
+def _icon(kind: str, colour: str = "#3d4750"):
+    return tool_icon(kind, colour, 24)
+
+
+class IconButton(QToolButton):
+    """Icon above a label. The glyph follows the theme text colour."""
+
+    def __init__(self, kind: str, text: str, labels: bool = True, parent=None):
+        super().__init__(parent)
+        self._kind = kind
+        self._full_text = text
+        self.setText(text if labels else "")
+        self.setToolTip(text)
+        self.setToolButtonStyle(
+            Qt.ToolButtonStyle.ToolButtonTextUnderIcon if labels else Qt.ToolButtonStyle.ToolButtonIconOnly
+        )
+        self.setAutoRaise(True)
+        self.setIconSize(QSize(24, 24))
+        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self._apply_size(labels)
+        self._paint_icon()
+
+    def _apply_size(self, labels: bool):
+        if not labels:
+            self.setFixedSize(40, 40)
+            return
+        width = max(68, self.fontMetrics().horizontalAdvance(self._full_text) + 16)
+        self.setFixedSize(width, 56)
+
+    def _paint_icon(self):
+        colour = self.palette().color(self.foregroundRole())
+        if self.isChecked():
+            colour = QColor("#3730a3") if colour.lightness() < 140 else QColor("#c7d2fe")
+        self.setIcon(tool_icon(self._kind, colour.name(), 24))
+
+    def setChecked(self, checked: bool):
+        super().setChecked(checked)
+        self._paint_icon()
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() == event.Type.PaletteChange:
+            self._paint_icon()
 
 
 class EditorBar(QWidget):
@@ -91,6 +112,11 @@ class EditorBar(QWidget):
         self._buttons = {}
         self._more_menu = None
         self._build()
+        self.setFixedHeight(62 if self._labels else 44)
+        self.setStyleSheet(
+            "QToolButton { border: none; background: transparent; padding: 2px 4px; }"
+            "QToolButton:checked { background: palette(mid); border-radius: 6px; }"
+        )
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.customContextMenuRequested.connect(self._context_menu)
 
@@ -99,13 +125,13 @@ class EditorBar(QWidget):
         row.setContentsMargins(6, 2, 6, 2)
         row.setSpacing(4)
         self._row = row
-        for name, slot in (
-            ("Editor", self.editor_requested.emit),
-            ("Library", self.library_requested.emit),
-            ("Capture", self.capture_requested.emit),
+        for name, kind, slot in (
+            ("Editor", "editor", self.editor_requested.emit),
+            ("Library", "library", self.library_requested.emit),
+            ("Capture", "capture", self.capture_requested.emit),
         ):
-            row.addWidget(self._nav(name, slot))
-        create = self._nav("Create", None)
+            row.addWidget(self._nav(name, slot, kind))
+        create = self._nav("Create", None, "create")
         menu = QMenu(create)
         menu.addAction("New image", lambda: self.save_requested.emit("new-image"))
         menu.addAction("New from clipboard", lambda: self.save_requested.emit("new-clipboard"))
@@ -115,12 +141,13 @@ class EditorBar(QWidget):
         self._tool_host = QWidget()
         self._tool_row = QHBoxLayout(self._tool_host)
         self._tool_row.setContentsMargins(0, 0, 0, 0)
-        self._tool_row.setSpacing(2)
-        row.addWidget(self._tool_host, 1)
-        self._more = self._nav("More", None)
+        self._tool_row.setSpacing(4)
+        row.addWidget(self._tool_host, 0)
+        self._more = self._nav("More", None, "more")
         self._more.setObjectName("MoreButton")
         self._tool_row.addWidget(self._more)
-        copy = self._nav("Copy All", self.copy_all_requested.emit)
+        row.addStretch(1)
+        copy = self._nav("Copy All", self.copy_all_requested.emit, "select")
         row.addWidget(copy)
         save = QPushButton("Save")
         save.setObjectName("SaveButton")
@@ -145,14 +172,13 @@ class EditorBar(QWidget):
         row.addWidget(box)
         self._relayout(800)
 
-    def _nav(self, text, slot):
-        button = QPushButton(text)
-        button.setFlat(True)
+    def _nav(self, text, slot, kind="more"):
+        button = IconButton(kind, text, self._labels)
         if slot is not None:
             button.clicked.connect(slot)
         return button
 
-    def button(self, tool_id: str) -> QPushButton | None:
+    def button(self, tool_id: str):
         return self._buttons.get(tool_id)
 
     def set_labels(self, enabled: bool):
@@ -167,8 +193,8 @@ class EditorBar(QWidget):
             if widget is not None and widget is not self._more:
                 widget.setParent(None)
         self._buttons.clear()
-        slot = 82 if self._labels else 40
-        reserved = 420
+        slot = 72 if self._labels else 44
+        reserved = 340
         room = max(1, (max(width, 320) - reserved) // slot)
         visible = list(self._order)
         if self._current not in visible and self._current in LABELS:
@@ -190,16 +216,13 @@ class EditorBar(QWidget):
         self._more_menu.addSeparator()
         self._more_menu.addAction("Customise toolbar…", self.customise)
         self._more.setMenu(self._more_menu)
-        self.setFixedHeight(60 if self._labels else 40)
+        self.setFixedHeight(62 if self._labels else 44)
 
-    def _tool_button(self, tool_id: str) -> QPushButton:
-        button = QPushButton(_icon("star" if tool_id == "favourites" else tool_id), LABELS.get(tool_id, tool_id) if self._labels else "")
+    def _tool_button(self, tool_id: str) -> IconButton:
+        kind = "star" if tool_id == "favourites" else tool_id
+        button = IconButton(kind, LABELS.get(tool_id, tool_id), self._labels)
         button.setCheckable(tool_id != "favourites")
         button.setChecked(tool_id == self._current)
-        button.setToolTip(LABELS.get(tool_id, tool_id))
-        button.setIconSize(QSize(20, 20))
-        button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-        button.setMinimumWidth(78 if self._labels else 36)
         button.clicked.connect(lambda _checked=False, t=tool_id: self._choose(t))
         self._buttons[tool_id] = button
         return button

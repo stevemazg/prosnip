@@ -1,7 +1,7 @@
 """Right-hand Style Presets and tool properties. One place for each setting."""
 
-from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QColor
+from PyQt6.QtCore import Qt, pyqtSignal, QRectF
+from PyQt6.QtGui import QColor, QPainter, QPen
 from PyQt6.QtWidgets import (
     QComboBox,
     QGridLayout,
@@ -14,20 +14,68 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from styles import STYLES
+from editor_bar import LABELS
 
-STARTER = (
-    ("Red", "#e00000"),
-    ("Green", "#2f9e44"),
-    ("Blue", "#3949ab"),
-    ("Yellow", "#c9a227"),
+PRESETS = (
+    ("Red", "#e00000", 2, False),
+    ("Green", "#2f9e44", 2, False),
+    ("Blue", "#3949ab", 2, False),
+    ("Yellow", "#c9a227", 2, False),
+    ("Black", "#1a1d21", 2, False),
+    ("White", "#f7f7f7", 2, False),
+    ("Red thick", "#e00000", 5, False),
+    ("Green thick", "#2f9e44", 5, False),
+    ("Blue thick", "#3949ab", 5, False),
+    ("Yellow thick", "#c9a227", 5, False),
+    ("Red dashed", "#e00000", 2, True),
+    ("Blue dashed", "#3949ab", 2, True),
 )
-MONO = (
-    ("Black", "#1a1d21"),
-    ("Slate", "#3d4750"),
-    ("Silver", "#6b7280"),
-    ("White", "#f4f5f6"),
-)
+
+
+class PreviewTile(QPushButton):
+    def __init__(self, name, colour, width, dashed, tool, parent=None):
+        super().__init__(parent)
+        self._name = name
+        self._colour = QColor(colour)
+        self._width = width
+        self._dashed = dashed
+        self._tool = tool
+        self.setFixedSize(56, 40)
+        self.setToolTip(name)
+        self.setFlat(True)
+
+    def paintEvent(self, _event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.fillRect(self.rect(), QColor("#f3f4f6" if self._colour.lightness() > 210 else self.palette().color(self.backgroundRole())))
+        pen = QPen(self._colour, max(1.2, self._width / 2))
+        if self._dashed:
+            pen.setStyle(Qt.PenStyle.DashLine)
+        painter.setPen(pen)
+        box = QRectF(8, 10, 40, 20)
+        tool = self._tool
+        if tool in {"rect", "ellipse"}:
+            painter.setBrush(QColor(self._colour.red(), self._colour.green(), self._colour.blue(), 60))
+            if tool == "ellipse":
+                painter.drawEllipse(box)
+            else:
+                painter.drawRoundedRect(box, 3, 3)
+        elif tool == "callout":
+            painter.setBrush(self._colour)
+            painter.drawRoundedRect(QRectF(8, 6, 36, 16), 3, 3)
+            painter.drawLine(16, 22, 14, 32)
+        elif tool == "number":
+            painter.setBrush(self._colour)
+            painter.drawEllipse(QRectF(18, 8, 20, 20))
+            painter.setPen(QPen(QColor("#ffffff")))
+            painter.drawText(QRectF(18, 8, 20, 20), int(Qt.AlignmentFlag.AlignCenter), "1")
+        elif tool == "text":
+            painter.drawText(self.rect(), int(Qt.AlignmentFlag.AlignCenter), "Aa")
+        else:
+            painter.drawLine(10, 30, 40, 10)
+            painter.drawLine(40, 10, 32, 12)
+            painter.drawLine(40, 10, 36, 18)
+        painter.end()
 
 
 class SideBar(QWidget):
@@ -44,8 +92,9 @@ class SideBar(QWidget):
         self._custom = []
         self._show_favourites = False
         self._effects = False
+        self._tool = "arrow"
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setContentsMargins(0, 0, 0, 36)
         layout.setSpacing(0)
         self._header = QLabel("Style Presets")
         self._header.setObjectName("section")
@@ -92,12 +141,18 @@ class SideBar(QWidget):
         select.setObjectName("SelectAllTool")
         select.clicked.connect(self.select_all_requested.emit)
         layout.addWidget(select)
+        spacer = QWidget()
+        spacer.setFixedHeight(4)
+        layout.addWidget(spacer)
         self._select = select
         self._rebuild()
 
     def set_tool_name(self, name: str, count: int):
-        self._select.setText(f"Select all ({name})")
+        self._tool = tool_id if False else name
+        label = LABELS.get(name, name)
+        self._select.setText(f"Select all ({label})")
         self._count.setText(f"{count} objects selected" if count else "")
+        self._rebuild()
 
     def show_favourites(self, enabled: bool):
         self._show_favourites = enabled
@@ -113,7 +168,14 @@ class SideBar(QWidget):
         self._header.setVisible(not enabled)
 
     def _palette(self):
-        return MONO if self._theme.currentText() == "Mono" else STARTER
+        if self._theme.currentText() == "Mono":
+            return [tile for tile in PRESETS if tile[0] in {"Black", "White", "Red thick", "Blue thick"}] + [
+                ("Slate", "#3d4750", 2, False),
+                ("Silver", "#6b7280", 2, False),
+                ("Slate thick", "#3d4750", 5, False),
+                ("Silver dashed", "#6b7280", 2, True),
+            ]
+        return list(PRESETS)
 
     def _rebuild(self):
         while self._grid.count():
@@ -121,16 +183,12 @@ class SideBar(QWidget):
             widget = item.widget()
             if widget is not None:
                 widget.deleteLater()
-        tiles = list(self._palette()) + list(self._custom)
+        tiles = list(self._palette()) + [(name, colour, 2, False) for name, colour in self._custom]
         if self._show_favourites:
             tiles = [tile for tile in tiles if tile[0] in self._favourites]
-        for index, (name, colour) in enumerate(tiles):
-            button = QPushButton()
-            button.setFixedSize(52, 36)
-            button.setToolTip(name)
-            button.setStyleSheet(
-                f"background: {colour}; border: 1px solid palette(mid); border-radius: 4px;"
-            )
+        for index, tile in enumerate(tiles):
+            name, colour, width, dashed = tile
+            button = PreviewTile(name, colour, width, dashed, self._tool)
             button.clicked.connect(lambda _checked=False, value=colour: self.preset_chosen.emit(QColor(value)))
             button.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
             button.customContextMenuRequested.connect(

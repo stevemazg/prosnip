@@ -84,6 +84,8 @@ jobs:
             "34-more-menu.png",
             "35-sidebar-arrow.png",
             "36-sidebar-callout.png",
+            "39-sidebar-shape.png",
+            "40-sidebar-step.png",
             "37-recents-tray.png",
             "38-canvas-demo.png"
           )) {

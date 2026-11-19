@@ -4,6 +4,7 @@ from PyQt6.QtWidgets import (
     QFormLayout, QSpinBox, QCheckBox, QDialogButtonBox,
     QGraphicsPixmapItem, QApplication, QLabel, QComboBox,
     QMessageBox, QLineEdit, QAbstractSpinBox, QSplitter,
+    QGraphicsDropShadowEffect,
 )
 from PyQt6.QtCore import Qt, QRectF, QPointF, QEvent, QRect, pyqtSignal
 from PyQt6.QtGui import (
@@ -29,7 +30,7 @@ from pathlib import Path
 from PIL import Image, ImageOps
 
 APP_NAME = "ProSnip-Bob"
-APP_VERSION = "1.8.0.0"
+APP_VERSION = "1.8.0.1"
 
 
 def clamp_crop_rect(rect: QRectF, width: int, height: int) -> QRect | None:
@@ -163,8 +164,13 @@ class EditorWindow(QMainWindow):
         pixmap.setDevicePixelRatio(1.0)
         self._bg_item = QGraphicsPixmapItem(pixmap)
         self._bg_item.setZValue(-100)
+        shadow = QGraphicsDropShadowEffect()
+        shadow.setBlurRadius(16)
+        shadow.setOffset(0, 2)
+        shadow.setColor(QColor(0, 0, 0, 70))
+        self._bg_item.setGraphicsEffect(shadow)
         self._scene.addItem(self._bg_item)
-        self._scene.setSceneRect(QRectF(pixmap.rect()))
+        self._scene.setSceneRect(QRectF(pixmap.rect()).adjusted(-28, -28, 28, 28))
 
     def fit_to_screen(self):
         screen = self.screen() or QGuiApplication.primaryScreen()
@@ -552,7 +558,7 @@ class EditorWindow(QMainWindow):
 
     def assert_compact_layout(self) -> None:
         """Toolbar on top, sidebar on the right, tray at the bottom, no docks."""
-        from PyQt6.QtWidgets import QDockWidget
+        from PyQt6.QtWidgets import QAbstractButton, QDockWidget, QToolButton
 
         problems = []
         if self.findChildren(QDockWidget):
@@ -574,9 +580,10 @@ class EditorWindow(QMainWindow):
         if duplicates:
             problems.append("duplicated settings: " + ", ".join(sorted(duplicates)))
         window = self.rect()
-        if window.width() >= 1000 and window.height() >= 600:
+        body_h = max(1, window.height() - self.menuBar().height())
+        if window.width() >= 1000 and body_h >= 500:
             canvas = self._view.rect()
-            if canvas.width() * canvas.height() < 0.5 * window.width() * window.height():
+            if canvas.width() * canvas.height() < 0.5 * window.width() * body_h:
                 problems.append("canvas is under half the window")
 
         def area(widget):
@@ -606,6 +613,23 @@ class EditorWindow(QMainWindow):
         if menu.window() is self or not (menu.windowFlags() & Qt.WindowType.Popup):
             problems.append("colour popup is not a separate popup")
         menu.close()
+        for button in self._bar.findChildren(QToolButton):
+            if button.icon().isNull():
+                problems.append(f"{button.toolTip() or button.text()} has no icon")
+            text = button.text()
+            if text and button.fontMetrics().horizontalAdvance(text) > button.width() - 8:
+                problems.append(f"{text} is clipped")
+        cards = [
+            card for card in self._tray.findChildren(QWidget, "RecentCard")
+            if card.isVisible() and card.width() > 20
+        ]
+        for index, card in enumerate(cards):
+            rect = QRect(card.mapTo(self._tray, card.rect().topLeft()), card.size())
+            for other in cards[index + 1:]:
+                other_rect = QRect(other.mapTo(self._tray, other.rect().topLeft()), other.size())
+                if rect.intersects(other_rect):
+                    problems.append("recent thumbnails overlap")
+                    break
         if problems:
             raise RuntimeError("Editor layout failed: " + "; ".join(problems))
 

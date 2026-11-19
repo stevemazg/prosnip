@@ -384,7 +384,12 @@ class ProSnipScene(QGraphicsScene):
             event.accept()
 
         elif tool == "number":
-            item = NumberItem(self._next_number, pos, self._pen_color)
+            colour = QColor(self._pen_color)
+            for existing in self.items():
+                if isinstance(existing, NumberItem) and existing.parentItem() is None:
+                    colour = QColor(existing.color)
+                    break
+            item = NumberItem(self._next_number, pos, colour)
             self.addItem(item)
             self._push_undo(item)
             self.sync_next_number()
@@ -562,7 +567,10 @@ class ProSnipView(QGraphicsView):
         self.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
         self.setDragMode(QGraphicsView.DragMode.NoDrag)
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
-        self.setResizeAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
+        self.setResizeAnchor(QGraphicsView.ViewportAnchor.AnchorViewCenter)
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setBackgroundBrush(QBrush(QColor("#3a3a3a")))
         self.setStyleSheet("background-color: #3a3a3a; border: none;")
 
@@ -657,8 +665,9 @@ class ProSnipView(QGraphicsView):
         view = self.viewport().size()
         if view.width() < 20 or view.height() < 20:
             return
-        if rect.width() > view.width() or rect.height() > view.height():
+        if rect.width() > view.width() - 48 or rect.height() > view.height() - 48:
             self.fitInView(rect, Qt.AspectRatioMode.KeepAspectRatio)
+            self.scale(0.92, 0.92)
 
     def set_select_drag(self, enabled: bool):
         mode = (

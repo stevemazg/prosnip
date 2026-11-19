@@ -136,12 +136,14 @@ class ToolOptions(QWidget):
 
         self._border_label = QLabel("Border")
         self._border_btn = self._swatch_button_widget("Border")
+        self._border_btn.setFixedSize(72, 48)
+        self._fill_btn = self._swatch_button_widget("Fill")
+        self._fill_btn.setFixedSize(72, 48)
         self._border_btn.setObjectName("BorderSwatch")
         self._border_btn.clicked.connect(lambda: self.open_colour_menu("border"))
         form.addRow(self._border_label, self._border_btn)
 
         self._fill_label = QLabel("Fill")
-        self._fill_btn = self._swatch_button_widget("Fill")
         self._fill_btn.setObjectName("FillSwatch")
         self._fill_btn.clicked.connect(lambda: self.open_colour_menu("fill"))
         form.addRow(self._fill_label, self._fill_btn)

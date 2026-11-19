@@ -5,7 +5,7 @@ black text on a black background.
 """
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QColor, QGuiApplication, QPalette
+from PyQt6.QtGui import QColor, QFont, QGuiApplication, QPalette
 from PyQt6.QtWidgets import QApplication
 
 WINDOW = QColor("#2b2b2b")
@@ -157,7 +157,7 @@ DARK = {
     "muted": "#c5cdd1",
     "accent": "#818cf8",
     "border": "#4a5154",
-    "workspace": "#1e2122",
+    "workspace": "#2b2b2b",
 }
 
 
@@ -208,6 +208,8 @@ def apply_theme(mode: str, app: QApplication | None = None) -> str:
     BORDER = QColor(colours["border"])
     if app is None:
         return resolved
+    font = QFont("Segoe UI", 9)
+    app.setFont(font)
     app.setStyle("Fusion")
     palette = QPalette()
     for group in (

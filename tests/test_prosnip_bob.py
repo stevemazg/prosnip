@@ -349,7 +349,7 @@ class LauncherTests(unittest.TestCase):
         labels = [label.text() for label in window.findChildren(main_window.QLabel)]
         self.assertIn("ProSnip-Bob", labels)
         self.assertIn(f"Version {editor.APP_VERSION}", labels)
-        self.assertEqual(editor.APP_VERSION, "1.8.0.0")
+        self.assertEqual(editor.APP_VERSION, "1.8.0.1")
         self.assertEqual(window.new_capture_button.text(), "New Capture")
         self.assertEqual(window.quit_button.text(), "Quit")
         self.assertIn("this system", window.shortcut_label.text())
@@ -631,8 +631,8 @@ class AppTests(unittest.TestCase):
             "Steve Maz",
             "ProSnip-Bob",
             "ProSnip-Bob screen capture and annotation tool",
-            "1.8.0.0",
-            "(1, 8, 0, 0)",
+            "1.8.0.1",
+            "(1, 8, 0, 1)",
             "ProSnip-Bob.exe",
             "Copyright (C) 2026 Steve Maz",
         ):
