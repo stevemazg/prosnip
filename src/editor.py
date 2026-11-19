@@ -617,7 +617,7 @@ class EditorWindow(QMainWindow):
             if button.icon().isNull():
                 problems.append(f"{button.toolTip() or button.text()} has no icon")
             text = button.text()
-            if text and button.fontMetrics().horizontalAdvance(text) > button.width() - 8:
+            if text and button.fontMetrics().horizontalAdvance(text) + 12 > button.width():
                 problems.append(f"{text} is clipped")
         cards = [
             card for card in self._tray.findChildren(QWidget, "RecentCard")

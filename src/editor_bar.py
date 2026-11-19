@@ -72,7 +72,7 @@ class IconButton(QToolButton):
         if not labels:
             self.setFixedSize(40, 40)
             return
-        width = max(68, self.fontMetrics().horizontalAdvance(self._full_text) + 16)
+        width = max(68, self.fontMetrics().horizontalAdvance(self._full_text) + 28)
         self.setFixedSize(width, 56)
 
     def _paint_icon(self):
@@ -193,20 +193,27 @@ class EditorBar(QWidget):
             if widget is not None and widget is not self._more:
                 widget.setParent(None)
         self._buttons.clear()
-        slot = 72 if self._labels else 44
-        reserved = 340
-        room = max(1, (max(width, 320) - reserved) // slot)
         visible = list(self._order)
         if self._current not in visible and self._current in LABELS:
-            visible = visible[:-1] + [self._current] if visible else [self._current]
-        shown = visible[:room]
-        overflow = visible[room:]
-        for tool_id in shown:
-            self._tool_row.addWidget(self._tool_button(tool_id))
+            visible = (visible[:-1] + [self._current]) if visible else [self._current]
+        buttons = [self._tool_button(tool_id) for tool_id in visible]
+        more_width = self._more.sizeHint().width() + 8
+        limit = max(160, int(width) - 360)
+        shown = []
+        used = more_width
+        for button in buttons:
+            needed = button.width() + 4
+            if shown and used + needed > limit:
+                break
+            shown.append(button)
+            used += needed
+        shown_ids = {button.toolTip() for button in shown}
+        for button in shown:
+            self._tool_row.addWidget(button)
         self._tool_row.addWidget(self._more)
         self._more_menu = QMenu(self)
-        for tool_id in overflow + MORE_LIVE:
-            if tool_id in shown:
+        for tool_id in visible + MORE_LIVE:
+            if LABELS.get(tool_id, tool_id) in shown_ids:
                 continue
             self._more_menu.addAction(LABELS.get(tool_id, tool_id), lambda t=tool_id: self._choose(t))
         self._more_menu.addSeparator()
