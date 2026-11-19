@@ -212,6 +212,7 @@ class ToolOptions(QWidget):
             spin.valueChanged.connect(slide.setValue)
             row.addWidget(slide, 1)
             row.addWidget(spin)
+            spin._row_box = box
             form.addRow(label, box)
         else:
             form.addRow(label, spin)
@@ -308,6 +309,9 @@ class ToolOptions(QWidget):
     def _show(self, label, spin, visible: bool):
         label.setVisible(visible)
         spin.setVisible(visible)
+        box = getattr(spin, "_row_box", None)
+        if box is not None:
+            box.setVisible(visible)
 
     def _kind(self, tool: str, item) -> str:
         if isinstance(item, NumberItem):
