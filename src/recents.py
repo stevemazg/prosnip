@@ -26,7 +26,7 @@ class RecentTray(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("RecentTray")
-        self.setFixedHeight(110)
+        self.setFixedHeight(124)
         self._selected = set()
         outer = QVBoxLayout(self)
         outer.setContentsMargins(6, 4, 6, 4)
@@ -79,12 +79,12 @@ class RecentTray(QWidget):
             self._row.addWidget(self._card(meta_path, meta))
         self._row.addStretch(0)
         width = 8 + max(1, len(cards[:30])) * 136
-        self._host.setMinimumSize(width, 96)
+        self._host.setMinimumSize(width, 108)
 
     def _card(self, meta_path: Path, meta: dict) -> QWidget:
         card = QWidget()
         card.setObjectName("RecentCard")
-        card.setFixedSize(128, 92)
+        card.setFixedSize(128, 100)
         layout = QVBoxLayout(card)
         layout.setContentsMargins(4, 4, 4, 2)
         layout.setSpacing(2)
