@@ -349,7 +349,7 @@ class LauncherTests(unittest.TestCase):
         labels = [label.text() for label in window.findChildren(main_window.QLabel)]
         self.assertIn("ProSnip-Bob", labels)
         self.assertIn(f"Version {editor.APP_VERSION}", labels)
-        self.assertEqual(editor.APP_VERSION, "1.7.1.0")
+        self.assertEqual(editor.APP_VERSION, "1.8.0.0")
         self.assertEqual(window.new_capture_button.text(), "New Capture")
         self.assertEqual(window.quit_button.text(), "Quit")
         self.assertIn("this system", window.shortcut_label.text())
@@ -631,8 +631,8 @@ class AppTests(unittest.TestCase):
             "Steve Maz",
             "ProSnip-Bob",
             "ProSnip-Bob screen capture and annotation tool",
-            "1.7.1.0",
-            "(1, 7, 1, 0)",
+            "1.8.0.0",
+            "(1, 8, 0, 0)",
             "ProSnip-Bob.exe",
             "Copyright (C) 2026 Steve Maz",
         ):
@@ -982,12 +982,12 @@ class EditorLayoutTests(unittest.TestCase):
         window.resize(1200, 800)
         window.show()
         QApplication.processEvents()
-        window._place_tools()
-        window.assert_tools_left_of_canvas()
-        panel = window._toolbar.mapTo(window, window._toolbar.rect().topLeft())
+        window.assert_compact_layout()
+        toolbar = window._bar.mapTo(window, window._bar.rect().topLeft())
         canvas = window._view.mapTo(window, window._view.rect().topLeft())
-        self.assertLess(panel.x(), canvas.x())
-        self.assertEqual(len(window._toolbar._tool_buttons), 16)
+        sidebar = window._sidebar.mapTo(window, window._sidebar.rect().topLeft())
+        self.assertLess(toolbar.y(), canvas.y())
+        self.assertGreater(sidebar.x(), canvas.x())
 
     def test_editor_stays_compact_at_three_sizes(self):
         from PIL import Image as PILImage
@@ -999,9 +999,8 @@ class EditorLayoutTests(unittest.TestCase):
         for width, height in ((900, 600), (1024, 680), (1920, 1080)):
             window.resize(width, height)
             QApplication.processEvents()
-            window._place_tools()
             window.assert_compact_layout()
-            self.assertLessEqual(window._top_bar.height(), 48)
+            self.assertLessEqual(window._bar.height(), 64)
             self.assertEqual(window.findChildren(QDockWidget), [])
 
     def test_step_numbers_follow_the_badges_on_the_canvas(self):
@@ -1041,16 +1040,21 @@ class EditorLayoutTests(unittest.TestCase):
         self.assertEqual(scene._next_number, 2)
 
     def test_text_and_panel_contrast(self):
-        from theme import MUTED, PANEL, RAISED, TEXT, WINDOW, apply_dark_theme, contrast_ratio
+        from theme import colours_for, contrast_ratio
 
-        apply_dark_theme()
-        for foreground, background in (
-            (TEXT, WINDOW),
-            (TEXT, PANEL),
-            (TEXT, RAISED),
-            (MUTED, WINDOW),
-        ):
-            self.assertGreaterEqual(contrast_ratio(foreground, background), 4.5)
+        for mode in ("light", "dark"):
+            colours = colours_for(mode)
+            for foreground, background in (
+                (colours["text"], colours["window"]),
+                (colours["text"], colours["panel"]),
+                (colours["muted"], colours["window"]),
+                (colours["muted"], colours["panel"]),
+            ):
+                self.assertGreaterEqual(
+                    contrast_ratio(QColor(foreground), QColor(background)),
+                    4.5,
+                    f"{foreground} on {background} in {mode}",
+                )
 
     def test_pen_width_is_inside_the_bounding_rect(self):
         rect = items.RectItem(QRectF(10, 10, 80, 40), QColor("#e63946"), QColor(0, 0, 0, 0), 16)

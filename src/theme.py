@@ -4,7 +4,8 @@ Palette and stylesheet are both set so a control cannot fall back to
 black text on a black background.
 """
 
-from PyQt6.QtGui import QColor, QPalette
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QColor, QGuiApplication, QPalette
 from PyQt6.QtWidgets import QApplication
 
 WINDOW = QColor("#2b2b2b")
@@ -135,9 +136,78 @@ def _paint(palette: QPalette, group: QPalette.ColorGroup) -> None:
 
 
 def apply_dark_theme(app: QApplication | None = None) -> None:
+    apply_theme("dark", app)
+
+
+LIGHT = {
+    "window": "#f4f5f6",
+    "panel": "#ffffff",
+    "raised": "#ffffff",
+    "text": "#1a1d21",
+    "muted": "#3d4750",
+    "accent": "#3730a3",
+    "border": "#c5c9cc",
+    "workspace": "#f4f5f6",
+}
+DARK = {
+    "window": "#141616",
+    "panel": "#2e3334",
+    "raised": "#3a4042",
+    "text": "#f3f4f6",
+    "muted": "#c5cdd1",
+    "accent": "#818cf8",
+    "border": "#4a5154",
+    "workspace": "#1e2122",
+}
+
+
+def colours_for(mode: str) -> dict:
+    return DARK if mode == "dark" else LIGHT
+
+
+def resolved_mode(mode: str) -> str:
+    if mode == "system":
+        hint = QGuiApplication.styleHints()
+        scheme = hint.colorScheme() if hint is not None else None
+        if scheme is not None and scheme == Qt.ColorScheme.Dark:
+            return "dark"
+        return "light"
+    return "dark" if mode == "dark" else "light"
+
+
+def _sheet(colours: dict) -> str:
+    return f"""
+QWidget {{ background-color: {colours['window']}; color: {colours['text']}; font-size: 13px; }}
+QMainWindow, QDialog, QMenuBar, QMenu {{ background-color: {colours['window']}; color: {colours['text']}; }}
+QMenuBar::item:selected, QMenu::item:selected {{ background-color: {colours['accent']}; color: #ffffff; }}
+QMenu {{ border: 1px solid {colours['border']}; }}
+QLabel {{ color: {colours['text']}; background: transparent; }}
+QLabel#muted, QLabel#section {{ color: {colours['muted']}; }}
+QPushButton, QComboBox, QListWidget, QPlainTextEdit, QTextEdit, QLineEdit {{
+    background-color: {colours['panel']}; color: {colours['text']};
+    border: 1px solid {colours['border']}; border-radius: 4px; padding: 2px 6px;
+}}
+QAbstractSpinBox QLineEdit {{ background: transparent; border: none; padding: 0; min-height: 0; color: {colours['text']}; }}
+QPushButton:checked {{ background-color: {colours['accent']}; color: #ffffff; border-color: {colours['accent']}; }}
+QToolTip {{ background-color: #141414; color: #ffffff; border: 1px solid #ffffff; padding: 6px 8px; }}
+"""
+
+
+def apply_theme(mode: str, app: QApplication | None = None) -> str:
+    """Apply light, dark, or system. Returns the resolved mode."""
     app = app or QApplication.instance()
+    resolved = resolved_mode(mode)
+    colours = colours_for(resolved)
+    global WINDOW, PANEL, RAISED, TEXT, MUTED, ACCENT, BORDER
+    WINDOW = QColor(colours["window"])
+    PANEL = QColor(colours["panel"])
+    RAISED = QColor(colours["raised"])
+    TEXT = QColor(colours["text"])
+    MUTED = QColor(colours["muted"])
+    ACCENT = QColor(colours["accent"])
+    BORDER = QColor(colours["border"])
     if app is None:
-        return
+        return resolved
     app.setStyle("Fusion")
     palette = QPalette()
     for group in (
@@ -147,6 +217,5 @@ def apply_dark_theme(app: QApplication | None = None) -> None:
     ):
         _paint(palette, group)
     app.setPalette(palette)
-    current = app.styleSheet() or ""
-    if "QDockWidget::title" not in current:
-        app.setStyleSheet(current + DARK_STYLE)
+    app.setStyleSheet(_sheet(colours))
+    return resolved

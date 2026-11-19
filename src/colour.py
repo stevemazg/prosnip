@@ -117,6 +117,11 @@ class ColourHistory:
         self.fill_colour = "#E63946"
         self.fill_opacity = 0
         self.border_opacity = 100
+        self.theme = "system"
+        self.toolbar_mode = "both"
+        self.toolbar_order = ""
+        self.sidebar_visible = True
+        self.tray_visible = True
         self._extra: dict = {}
         self.load()
 
@@ -130,6 +135,7 @@ class ColourHistory:
             if key not in {
             "colour_format", "loupe_zoom", "recent_colours", "auto_copy", "last_folder",
             "border_colour", "fill_colour", "fill_opacity", "border_opacity",
+            "theme", "toolbar_mode", "toolbar_order", "sidebar_visible", "tray_visible",
         }
         }
         fmt = data.get("colour_format", "hex")
@@ -141,6 +147,15 @@ class ColourHistory:
         self.fill_colour = str(data.get("fill_colour") or "#E63946")
         self.fill_opacity = _percent(data.get("fill_opacity", 0), 0)
         self.border_opacity = _percent(data.get("border_opacity", 100), 100)
+        self.theme = str(data.get("theme") or "system")
+        if self.theme not in {"system", "light", "dark"}:
+            self.theme = "system"
+        self.toolbar_mode = str(data.get("toolbar_mode") or "both")
+        if self.toolbar_mode not in {"both", "icons"}:
+            self.toolbar_mode = "both"
+        self.toolbar_order = str(data.get("toolbar_order") or "")
+        self.sidebar_visible = bool(data.get("sidebar_visible", True))
+        self.tray_visible = bool(data.get("tray_visible", True))
         colours = []
         for item in data.get("recent_colours", []):
             parsed = parse_hex(str(item))
@@ -163,11 +178,30 @@ class ColourHistory:
             "fill_colour": self.fill_colour,
             "fill_opacity": self.fill_opacity,
             "border_opacity": self.border_opacity,
+            "theme": self.theme,
+            "toolbar_mode": self.toolbar_mode,
+            "toolbar_order": self.toolbar_order,
+            "sidebar_visible": self.sidebar_visible,
+            "tray_visible": self.tray_visible,
         })
         _write_json(self.path, payload)
 
     def set_auto_copy(self, enabled: bool) -> None:
         self.auto_copy = bool(enabled)
+        self.save()
+
+    def set_theme(self, theme: str) -> None:
+        self.theme = theme if theme in {"system", "light", "dark"} else "system"
+        self.save()
+
+    def set_toolbar(self, mode: str, order: str) -> None:
+        self.toolbar_mode = mode if mode in {"both", "icons"} else "both"
+        self.toolbar_order = str(order or "")
+        self.save()
+
+    def set_panels(self, sidebar: bool, tray: bool) -> None:
+        self.sidebar_visible = bool(sidebar)
+        self.tray_visible = bool(tray)
         self.save()
 
     def set_shape_style(self, border: str, fill: str, fill_opacity: int, border_opacity: int) -> None:

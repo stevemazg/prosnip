@@ -76,7 +76,16 @@ jobs:
             "24-editor-1920.png",
             "25-shape-options.png",
             "26-transparent-popup.png",
-            "27-shape-fills.png"
+            "27-shape-fills.png",
+            "30-editor-1024-light.png",
+            "31-editor-1024-dark.png",
+            "32-editor-1920-light.png",
+            "33-editor-1920-dark.png",
+            "34-more-menu.png",
+            "35-sidebar-arrow.png",
+            "36-sidebar-callout.png",
+            "37-recents-tray.png",
+            "38-canvas-demo.png"
           )) {
             $file = Join-Path screenshots $name
             if (-not (Test-Path $file)) { throw "Missing $name" }

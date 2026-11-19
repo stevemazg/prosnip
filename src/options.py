@@ -7,6 +7,7 @@ from PyQt6.QtWidgets import (
     QAbstractSpinBox,
     QCheckBox,
     QColorDialog,
+    QFormLayout,
     QGridLayout,
     QHBoxLayout,
     QLabel,
@@ -103,17 +104,15 @@ class ToolOptions(QWidget):
         self._colour_target = "colour"
         self._style_item = None
         self._colour_menu = None
-        self.setObjectName("ToolOptions")
-        self.setFixedHeight(36)
-        self.setMaximumHeight(40)
+        self.setObjectName("ToolProperties")
         self.setStyleSheet(
             """
-            QWidget#ToolOptions { background: #323232; }
-            QLabel { color: #a0a0a0; background: transparent; font-size: 12px; }
-            QCheckBox { color: #e6e6e6; background: transparent; spacing: 4px; }
+            QWidget#ToolProperties { background: transparent; }
+            QLabel { color: palette(window-text); background: transparent; font-size: 12px; }
+            QCheckBox { color: palette(window-text); background: transparent; spacing: 4px; }
             QPushButton#ArrowStyle {
-                background: #383838; color: #e6e6e6;
-                border: 1px solid #4a4a4a; border-radius: 3px;
+                background: palette(button); color: palette(button-text);
+                border: 1px solid palette(mid); border-radius: 3px;
                 padding: 2px 8px;
             }
             """
@@ -121,9 +120,10 @@ class ToolOptions(QWidget):
         self._build()
 
     def _build(self):
-        row = QHBoxLayout(self)
-        row.setContentsMargins(8, 4, 8, 4)
-        row.setSpacing(8)
+        form = QFormLayout(self)
+        form.setContentsMargins(8, 8, 8, 8)
+        form.setSpacing(8)
+        self._form = form
 
         self._colour_btn = QPushButton()
         self._colour_btn.setObjectName("ColourSwatch")
@@ -131,44 +131,47 @@ class ToolOptions(QWidget):
         self._colour_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._colour_btn.setToolTip("Colour")
         self._colour_btn.clicked.connect(lambda: self.open_colour_menu("colour"))
-        row.addWidget(self._colour_btn)
+        self._colour_label = QLabel("Colour")
+        form.addRow(self._colour_label, self._colour_btn)
 
         self._border_label = QLabel("Border")
-        self._border_label.setFixedHeight(26)
         self._border_btn = self._swatch_button_widget("Border")
+        self._border_btn.setObjectName("BorderSwatch")
         self._border_btn.clicked.connect(lambda: self.open_colour_menu("border"))
-        row.addWidget(self._border_label)
-        row.addWidget(self._border_btn)
+        form.addRow(self._border_label, self._border_btn)
 
         self._fill_label = QLabel("Fill")
-        self._fill_label.setFixedHeight(26)
         self._fill_btn = self._swatch_button_widget("Fill")
+        self._fill_btn.setObjectName("FillSwatch")
         self._fill_btn.clicked.connect(lambda: self.open_colour_menu("fill"))
-        row.addWidget(self._fill_label)
-        row.addWidget(self._fill_btn)
+        form.addRow(self._fill_label, self._fill_btn)
 
-        self._width_label, self._width = self._pair(row, "Width", 1, 24, DEFAULT_STYLE.line_width, 48)
-        self._font_label, self._font = self._pair(row, "Font", 8, 72, DEFAULT_STYLE.font_size, 48)
-        self._opacity_label, self._opacity = self._pair(row, "Opacity", 0, 100, self._border_opacity, 48)
+        self._width_label, self._width = self._pair(form, "Width", 1, 24, DEFAULT_STYLE.line_width, 72)
+        self._width.setObjectName("WidthSpin")
+        self._font_label, self._font = self._pair(form, "Font", 8, 72, DEFAULT_STYLE.font_size, 72)
+        self._font.setObjectName("FontSpin")
+        self._opacity_label, self._opacity = self._pair(form, "Opacity", 0, 100, self._border_opacity, 72)
+        self._opacity.setObjectName("OpacitySpin")
         self._fill_opacity_label, self._fill_opacity_spin = self._pair(
-            row, "Fill opacity", 0, 100, self._fill_opacity, 48
+            form, "Fill opacity", 0, 100, self._fill_opacity, 72
         )
-        self._next_label, self._next_spin = self._pair(row, "Next", 1, 999, 1, 56)
-        self._step_label, self._step_spin = self._pair(row, "Step", 1, 999, 1, 56)
+        self._fill_opacity_spin.setObjectName("FillOpacitySpin")
+        self._next_label, self._next_spin = self._pair(form, "Next number", 1, 999, 1, 72)
+        self._next_spin.setObjectName("NextNumberSpin")
+        self._step_label, self._step_spin = self._pair(form, "Step number", 1, 999, 1, 72)
+        self._step_spin.setObjectName("StepNumberSpin")
         self._next_spin.setToolTip("Number placed by the next step badge")
         self._step_spin.setToolTip("Number on the selected step")
 
         self._outline = QCheckBox("Outline")
-        self._outline.setFixedHeight(26)
-        row.addWidget(self._outline)
+        self._outline.setObjectName("OutlineToggle")
+        form.addRow("", self._outline)
 
-        self._arrow_btn = QPushButton("Arrow")
+        self._arrow_btn = QPushButton("Arrow style")
         self._arrow_btn.setObjectName("ArrowStyle")
-        self._arrow_btn.setFixedHeight(26)
         self._arrow_btn.setToolTip("Arrow style")
         self._arrow_btn.clicked.connect(self.open_arrow_menu)
-        row.addWidget(self._arrow_btn)
-        row.addStretch(1)
+        form.addRow("", self._arrow_btn)
 
         self._width.valueChanged.connect(self._apply_width)
         self._font.valueChanged.connect(self._apply_font)
@@ -179,14 +182,13 @@ class ToolOptions(QWidget):
         self._fill_opacity_spin.valueChanged.connect(self._apply_fill_opacity)
         self._paint_swatches()
 
-    def _pair(self, row, text, low, high, value, width):
+    def _pair(self, form, text, low, high, value, width):
         label = QLabel(text)
-        label.setFixedHeight(26)
         spin = QSpinBox()
         spin.setRange(low, high)
         spin.setValue(value)
         spin.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
-        spin.setFixedSize(width, 26)
+        spin.setFixedWidth(width)
         spin.setAlignment(Qt.AlignmentFlag.AlignCenter)
         palette = spin.palette()
         palette.setColor(QPalette.ColorRole.Base, QColor("#383838"))
@@ -195,9 +197,8 @@ class ToolOptions(QWidget):
         edit = spin.lineEdit()
         if edit is not None:
             edit.setPalette(palette)
-            edit.setStyleSheet("color: #e6e6e6; background: transparent; border: none; padding: 0; min-height: 0;")
-        row.addWidget(label)
-        row.addWidget(spin)
+            edit.setStyleSheet("color: palette(text); background: transparent; border: none; padding: 0; min-height: 0;")
+        form.addRow(label, spin)
         return label, spin
 
     def bind(self, scene, toolbar):
@@ -274,6 +275,7 @@ class ToolOptions(QWidget):
         kind = self._kind(tool, item)
         shape = kind in {"shape", "callout"}
         self._colour_btn.setVisible(not shape and kind != "crop")
+        self._colour_label.setVisible(not shape and kind != "crop")
         self._border_label.setVisible(shape)
         self._border_btn.setVisible(shape)
         self._fill_label.setVisible(shape)

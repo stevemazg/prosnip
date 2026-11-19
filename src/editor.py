@@ -1,9 +1,9 @@
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
-    QToolBar, QPushButton, QFileDialog, QDialog,
+    QPushButton, QFileDialog, QDialog,
     QFormLayout, QSpinBox, QCheckBox, QDialogButtonBox,
-    QGraphicsPixmapItem, QApplication, QLabel,
-    QMessageBox, QLineEdit, QAbstractSpinBox,
+    QGraphicsPixmapItem, QApplication, QLabel, QComboBox,
+    QMessageBox, QLineEdit, QAbstractSpinBox, QSplitter,
 )
 from PyQt6.QtCore import Qt, QRectF, QPointF, QEvent, QRect, pyqtSignal
 from PyQt6.QtGui import (
@@ -13,12 +13,14 @@ from PyQt6.QtGui import (
 
 from canvas import ProSnipScene, ProSnipView
 from colour import ColourHistory
+from editor_bar import EditorBar
 from layout import fit_editor_frame
 from options import ToolOptions
+from recents import RecentTray
+from sidebar import SideBar
 from swatches import SwatchBook
+from theme import apply_theme, colours_for, resolved_mode
 from toolbar import ToolBar
-from styles import with_tooltip_style
-from theme import apply_dark_theme
 
 import io
 import math
@@ -27,7 +29,7 @@ from pathlib import Path
 from PIL import Image, ImageOps
 
 APP_NAME = "ProSnip-Bob"
-APP_VERSION = "1.7.1.0"
+APP_VERSION = "1.8.0.0"
 
 
 def clamp_crop_rect(rect: QRectF, width: int, height: int) -> QRect | None:
@@ -138,11 +140,8 @@ class EditorWindow(QMainWindow):
         self._pil_image = pil_image
         self._filename = None
         self._bg_item = None
-
-        apply_dark_theme()
         self.setWindowTitle(f"{APP_NAME} — Untitled")
         self.setMinimumSize(900, 600)
-        self.setStyleSheet(with_tooltip_style("background-color: #2b2b2b;"))
         self._did_fit = False
 
         self._placing_tools = False
@@ -152,6 +151,7 @@ class EditorWindow(QMainWindow):
 
         self._history = ColourHistory()
         self._swatches = SwatchBook(self._history.path)
+        self._theme = apply_theme(self._history.theme)
         self._setup_background()
         self._setup_ui()
         self._connect_signals()
@@ -188,36 +188,187 @@ class EditorWindow(QMainWindow):
         self._build_menus()
         self._options = ToolOptions(self._history, self._swatches)
         self._options.bind(self._scene, self._toolbar)
-        options = QToolBar("Tool options")
-        options.setObjectName("ToolOptionsBar")
-        options.setMovable(False)
-        options.setFloatable(False)
-        options.setFixedHeight(40)
-        options.setMaximumHeight(48)
-        options.addWidget(self._options)
-        self.addToolBar(Qt.ToolBarArea.TopToolBarArea, options)
-        self._top_bar = options
+        self._bar = EditorBar(self._history)
+        self._bar.setObjectName("EditorToolbar")
+        self._sidebar = SideBar(self._options, self._history)
+        self._tray = RecentTray()
+        self._library = QLabel("The library is coming in 2.0.")
+        self._library.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._library.hide()
 
         central = QWidget()
         central.setObjectName("EditorBody")
-        central.setStyleSheet("QWidget#EditorBody { background: #323232; }")
         self.setCentralWidget(central)
-        self._tool_host = QWidget()
-        self._tool_host.setObjectName("ToolPanel")
-        self._tool_host.setStyleSheet("QWidget#ToolPanel { background: #323232; }")
-        host = QVBoxLayout(self._tool_host)
-        host.setContentsMargins(0, 0, 0, 0)
-        host.setSpacing(0)
-        host.addWidget(self._toolbar, 0, Qt.AlignmentFlag.AlignTop)
-        host.addStretch(1)
+        column = QVBoxLayout(central)
+        column.setContentsMargins(0, 0, 0, 0)
+        column.setSpacing(0)
+        column.addWidget(self._bar)
+
         self._view.setObjectName("EditorCanvas")
-        row = QHBoxLayout(central)
-        row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(0)
-        row.addWidget(self._tool_host, 0)
-        row.addWidget(self._view, 1)
-        self._place_tools()
-        self._build_status()
+        canvas_column = QWidget()
+        canvas_layout = QVBoxLayout(canvas_column)
+        canvas_layout.setContentsMargins(0, 0, 0, 0)
+        canvas_layout.setSpacing(0)
+        canvas_layout.addWidget(self._view, 1)
+        canvas_layout.addWidget(self._library, 1)
+        self._footer = self._build_footer()
+        canvas_layout.addWidget(self._footer)
+        self._splitter = QSplitter()
+        self._splitter.setObjectName("EditorSplit")
+        self._splitter.addWidget(canvas_column)
+        self._splitter.addWidget(self._sidebar)
+        self._splitter.setStretchFactor(0, 1)
+        column.addWidget(self._splitter, 1)
+        column.addWidget(self._tray)
+        self._sidebar.setVisible(self._history.sidebar_visible)
+        self._tray.setVisible(self._history.tray_visible)
+        self._wire_shell()
+        self._apply_workspace()
+        self._remember_capture()
+
+    def _build_footer(self):
+        footer = QWidget()
+        footer.setObjectName("EditorFooter")
+        footer.setFixedHeight(28)
+        row = QHBoxLayout(footer)
+        row.setContentsMargins(8, 0, 8, 0)
+        recent = QPushButton("Hide recent" if self._history.tray_visible else "Show recent")
+        recent.setObjectName("RecentToggle")
+        recent.clicked.connect(self._toggle_tray)
+        self._recent_toggle = recent
+        row.addWidget(recent)
+        self._footer_zoom = QPushButton("100%")
+        self._footer_zoom.setObjectName("ZoomButton")
+        from PyQt6.QtWidgets import QMenu
+        menu = QMenu(self._footer_zoom)
+        menu.addAction("Fit", self._view.fit_scene)
+        menu.addAction("Actual size", self._view.resetTransform)
+        for percent in (25, 50, 100, 200, 400):
+            menu.addAction(f"{percent}%", lambda p=percent: self._set_zoom(p))
+        self._footer_zoom.setMenu(menu)
+        row.addWidget(self._footer_zoom)
+        self._footer_size = QPushButton(f"{self._pil_image.width} × {self._pil_image.height} px")
+        self._footer_size.setObjectName("ImageSize")
+        self._footer_size.clicked.connect(self._resize_image)
+        row.addWidget(self._footer_size)
+        row.addStretch(1)
+        effects = QPushButton("Effects")
+        effects.setCheckable(True)
+        effects.toggled.connect(self._sidebar.show_effects)
+        row.addWidget(effects)
+        properties = QPushButton("Properties")
+        properties.setCheckable(True)
+        properties.setChecked(True)
+        properties.toggled.connect(lambda checked: self._sidebar.show_effects(not checked))
+        row.addWidget(properties)
+        return footer
+
+    def _wire_shell(self):
+        self._bar.tool_changed.connect(self._select_tool)
+        self._bar.capture_requested.connect(self.new_capture_requested.emit)
+        self._bar.library_requested.connect(lambda: self._show_library(True))
+        self._bar.editor_requested.connect(lambda: self._show_library(False))
+        self._bar.copy_all_requested.connect(self._copy_all)
+        self._bar.save_requested.connect(self._save_action)
+        self._bar.favourites_requested.connect(lambda: self._sidebar.show_favourites(True))
+        self._sidebar.preset_chosen.connect(self._options.set_border_colour)
+        self._sidebar.select_all_requested.connect(self._select_tool_objects)
+        self._tray.opened.connect(self._open_recent)
+        self._view.cursor_moved.connect(self._on_cursor)
+
+    def _show_library(self, enabled: bool):
+        self._library.setVisible(enabled)
+        self._view.setVisible(not enabled)
+
+    def _toggle_tray(self):
+        visible = not self._tray.isVisible()
+        self._tray.setVisible(visible)
+        self._recent_toggle.setText("Hide recent" if visible else "Show recent")
+        self._history.set_panels(self._sidebar.isVisible(), visible)
+
+    def _set_zoom(self, percent: int):
+        self._view.resetTransform()
+        factor = percent / 100.0
+        self._view.scale(factor, factor)
+        self._footer_zoom.setText(f"{percent}%")
+
+    def _save_action(self, kind: str):
+        if kind == "file":
+            self._save_png()
+        elif kind == "clipboard":
+            self._copy_all()
+        elif kind == "email":
+            self._email_draft()
+        elif kind == "new-image":
+            self._new_blank()
+        elif kind == "new-clipboard":
+            self._paste_image()
+        elif kind in {"program", "printer"}:
+            QMessageBox.information(self, "Save", f"{kind.title()} sharing arrives in 2.0.")
+
+    def _copy_all(self):
+        image = self._render_scene()
+        clipboard = QApplication.clipboard()
+        if clipboard is not None:
+            clipboard.setImage(image)
+
+    def _email_draft(self):
+        import tempfile
+        import webbrowser
+        path = Path(tempfile.gettempdir()) / "ProSnip-Bob-share.png"
+        self._render_scene().save(str(path), "PNG")
+        webbrowser.open("mailto:?subject=ProSnip-Bob%20capture")
+
+    def _new_blank(self):
+        image = Image.new("RGB", (960, 540), "#ffffff")
+        self._replace_pixmap(pil_to_qpixmap(image), image)
+
+    def _paste_image(self):
+        clipboard = QApplication.clipboard()
+        if clipboard is None:
+            return
+        image = clipboard.image()
+        if image.isNull():
+            return
+        pixmap = QPixmap.fromImage(image)
+        self._replace_pixmap(pixmap, Image.frombytes("RGB", (image.width(), image.height()), bytes(image.bits().asstring(image.sizeInBytes()))) if False else self._pil_image)
+        self._bg_item.setPixmap(pixmap)
+        self._scene.setSceneRect(QRectF(pixmap.rect()))
+
+    def _open_recent(self, path: str):
+        if not path:
+            return
+        image = Image.open(path).convert("RGB")
+        self._replace_pixmap(pil_to_qpixmap(image), image)
+        self._show_library(False)
+
+    def _remember_capture(self):
+        try:
+            self._tray.remember(self._pil_image, datetime.now().strftime("capture-%H%M%S"))
+        except Exception:
+            pass
+
+    def _select_tool_objects(self):
+        kinds = {
+            "arrow": ("ArrowItem",),
+            "text": ("TextItem",),
+            "callout": ("CalloutItem",),
+            "rect": ("RectItem", "EllipseItem"),
+            "number": ("NumberItem",),
+        }.get(self._scene._tool, ())
+        self._scene.clearSelection()
+        count = 0
+        for item in self._scene.items():
+            if item.__class__.__name__ in kinds and item.parentItem() is None:
+                item.setSelected(True)
+                count += 1
+        self._sidebar.set_tool_name(self._scene._tool, count)
+
+    def _apply_workspace(self):
+        colours = colours_for(self._theme)
+        self._view.setStyleSheet(f"background-color: {colours['workspace']}; border: none;")
+        from PyQt6.QtGui import QBrush
+        self._view.setBackgroundBrush(QBrush(QColor(colours["workspace"])))
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -277,7 +428,10 @@ class EditorWindow(QMainWindow):
         arrange.addAction("Renumber steps", self._scene.renumber_steps)
         self._arrange_menu = arrange
 
+        image.addAction("Canvas colour…", self._canvas_colour)
+
         view = bar.addMenu("View")
+        view.addAction("Side bar", self._toggle_sidebar)
         view.addAction("Zoom in", lambda: self._view.scale(1.15, 1.15))
         view.addAction("Zoom out", lambda: self._view.scale(1 / 1.15, 1 / 1.15))
         fit = view.addAction("Fit")
@@ -303,9 +457,9 @@ class EditorWindow(QMainWindow):
         self._view.cursor_moved.connect(self._on_cursor)
 
     def _on_cursor(self, pos: QPointF):
-        self._status_pos.setText(f"x {int(pos.x())}  y {int(pos.y())}")
         zoom = int(round(self._view.transform().m11() * 100))
-        self._status_zoom.setText(f"{zoom}%")
+        if getattr(self, "_footer_zoom", None) is not None:
+            self._footer_zoom.setText(f"{zoom}%")
 
     def _preferences(self):
         dialog = QDialog(self)
@@ -314,6 +468,12 @@ class EditorWindow(QMainWindow):
         auto = QCheckBox("Copy the snip to the clipboard after a capture")
         auto.setChecked(self._history.auto_copy)
         layout.addWidget(auto)
+        theme = QComboBox()
+        theme.addItems(["System", "Light", "Dark"])
+        current = {"system": "System", "light": "Light", "dark": "Dark"}.get(self._history.theme, "System")
+        theme.setCurrentText(current)
+        layout.addWidget(QLabel("Appearance"))
+        layout.addWidget(theme)
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
@@ -322,6 +482,10 @@ class EditorWindow(QMainWindow):
         layout.addWidget(buttons)
         if dialog.exec() == QDialog.DialogCode.Accepted:
             self._history.set_auto_copy(auto.isChecked())
+            chosen = {"System": "system", "Light": "light", "Dark": "dark"}[theme.currentText()]
+            self._history.set_theme(chosen)
+            self._theme = apply_theme(chosen)
+            self._apply_workspace()
 
     def _select_all(self):
         focus = QApplication.focusWidget()
@@ -363,86 +527,57 @@ class EditorWindow(QMainWindow):
         )
 
     def _place_tools(self):
-        if getattr(self, "_top_bar", None) is not None:
-            self._top_bar.setFixedHeight(40)
-        central = self.centralWidget()
-        available = central.height() if central is not None and central.height() > 80 else max(240, self.height() - 140)
-        self._toolbar.arrange(available)
-        if getattr(self, "_tool_host", None) is not None:
-            self._tool_host.setFixedWidth(self._toolbar.width())
+        if getattr(self, "_bar", None) is not None:
+            self._bar._relayout(self._bar.width() or self.width())
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        if getattr(self, "_placing_tools", False) or getattr(self, "_toolbar", None) is None:
+
+    def _toggle_sidebar(self):
+        visible = not self._sidebar.isVisible()
+        self._sidebar.setVisible(visible)
+        self._history.set_panels(visible, self._tray.isVisible())
+
+    def _canvas_colour(self):
+        from PyQt6.QtWidgets import QColorDialog
+        from PyQt6.QtGui import QBrush
+        colour = QColorDialog.getColor(QColor("#f4f5f6"), self, "Canvas colour")
+        if not colour.isValid():
             return
-        self._placing_tools = True
-        try:
-            self._place_tools()
-        finally:
-            self._placing_tools = False
+        self._view.setBackgroundBrush(QBrush(colour))
 
     def assert_tools_left_of_canvas(self) -> None:
-        """Fail if the tools are not a left-hand column beside the canvas."""
-        from PyQt6.QtWidgets import QScrollArea
-
-        panel = self._toolbar
-        view = self._view
-        origin = panel.mapTo(self, panel.rect().topLeft())
-        view_origin = view.mapTo(self, view.rect().topLeft())
-        panel_rect = QRect(origin, panel.size())
-        view_rect = QRect(view_origin, view.size())
-        problems = []
-        if panel.width() < 40 or panel.height() < 80:
-            problems.append(f"tool panel is too small ({panel.width()}x{panel.height()})")
-        if origin.x() >= view_origin.x():
-            problems.append(f"tool panel x {origin.x()} is not left of the canvas x {view_origin.x()}")
-        if panel_rect.intersects(view_rect):
-            problems.append(f"tool panel {panel_rect.getRect()} overlaps the canvas {view_rect.getRect()}")
-        if len(panel._tool_buttons) != 16:
-            problems.append(f"expected 16 tools, found {len(panel._tool_buttons)}")
-        for tool_id, button in panel._tool_buttons.items():
-            if not button.isVisible():
-                problems.append(f"{tool_id} is not visible")
-            ancestor = button.parentWidget()
-            while ancestor is not None:
-                if isinstance(ancestor, QScrollArea):
-                    problems.append(f"{tool_id} is inside a scroll area")
-                    break
-                ancestor = ancestor.parentWidget()
-        if problems:
-            raise RuntimeError("Editor tool layout failed: " + "; ".join(problems))
+        """Kept name for older checks. The tools now live on the top toolbar."""
+        self.assert_compact_layout()
 
     def assert_compact_layout(self) -> None:
-        """Fail when the simplified editor clips, overlaps, or grows a dock."""
-        from PyQt6.QtWidgets import QDockWidget, QScrollArea
+        """Toolbar on top, sidebar on the right, tray at the bottom, no docks."""
+        from PyQt6.QtWidgets import QDockWidget
 
         problems = []
         if self.findChildren(QDockWidget):
             problems.append("a dock widget is still in the editor")
-        options_h = self._top_bar.height() if self._top_bar is not None else 0
-        if options_h > 48 or self._options.height() > 48:
-            problems.append(
-                f"tool options bar is {options_h}px (options widget {self._options.height()}px)"
-            )
+        if self._bar.height() > 64:
+            problems.append(f"toolbar is {self._bar.height()}px")
+        if not 240 <= self._sidebar.width() <= 300:
+            problems.append(f"sidebar width is {self._sidebar.width()}px")
+        if self._footer.height() > 32:
+            problems.append(f"footer is {self._footer.height()}px")
+        if self._tray.isVisible() and self._tray.height() > 130:
+            problems.append(f"tray is {self._tray.height()}px")
+        names = []
+        for widget in self.findChildren(QWidget):
+            name = widget.objectName()
+            if name in {"BorderSwatch", "FillSwatch", "WidthSpin", "FillOpacitySpin", "OpacitySpin"}:
+                names.append(name)
+        duplicates = {name for name in names if names.count(name) > 1}
+        if duplicates:
+            problems.append("duplicated settings: " + ", ".join(sorted(duplicates)))
         window = self.rect()
-        if len(self._toolbar._tool_buttons) != 16:
-            problems.append(f"expected 16 tools, found {len(self._toolbar._tool_buttons)}")
-        for tool_id, button in self._toolbar._tool_buttons.items():
-            if not button.isVisible():
-                problems.append(f"{tool_id} is hidden")
-                continue
-            top_left = button.mapTo(self, button.rect().topLeft())
-            bottom_right = button.mapTo(self, button.rect().bottomRight())
-            if not window.contains(top_left) or not window.contains(bottom_right):
-                problems.append(
-                    f"{tool_id} sits outside the window at {top_left.x()},{top_left.y()}"
-                )
-            ancestor = button.parentWidget()
-            while ancestor is not None:
-                if isinstance(ancestor, QScrollArea):
-                    problems.append(f"{tool_id} is inside a scroll area")
-                    break
-                ancestor = ancestor.parentWidget()
+        if window.width() >= 1000 and window.height() >= 600:
+            canvas = self._view.rect()
+            if canvas.width() * canvas.height() < 0.5 * window.width() * window.height():
+                problems.append("canvas is under half the window")
 
         def area(widget):
             if widget is None or not widget.isVisible() or widget.height() < 8 or widget.width() < 8:
@@ -450,11 +585,11 @@ class EditorWindow(QMainWindow):
             return QRect(widget.mapTo(self, widget.rect().topLeft()), widget.size())
 
         named = [
-            ("menu", self.menuBar()),
-            ("options", self._top_bar),
-            ("tools", self._tool_host),
+            ("toolbar", self._bar),
             ("canvas", self._view),
-            ("status", self.statusBar()),
+            ("sidebar", self._sidebar),
+            ("footer", self._footer),
+            ("tray", self._tray),
         ]
         rects = [(name, area(widget)) for name, widget in named]
         rects = [(name, rect) for name, rect in rects if rect is not None]
@@ -464,27 +599,13 @@ class EditorWindow(QMainWindow):
                 if hit.width() > 3 and hit.height() > 3:
                     problems.append(f"{name} overlaps {other} by {hit.width()}x{hit.height()}")
         menu = self._options.build_colour_menu()
-        layout = self._options.layout()
-        if layout is not None:
-            for index in range(layout.count()):
-                item = layout.itemAt(index)
-                if item is not None and item.widget() is menu:
-                    problems.append("colour popup is inside the options bar")
         menu.popup(self.mapToGlobal(self.rect().center()))
         app = QApplication.instance()
         if app is not None:
             app.processEvents()
-        if menu.window() is self:
-            problems.append("colour popup is not a separate window")
-        if not (menu.windowFlags() & Qt.WindowType.Popup):
-            problems.append("colour popup is not a popup")
+        if menu.window() is self or not (menu.windowFlags() & Qt.WindowType.Popup):
+            problems.append("colour popup is not a separate popup")
         menu.close()
-        if self._top_bar.height() > 48:
-            problems.append("opening the colour popup grew the options bar")
-        try:
-            self.assert_tools_left_of_canvas()
-        except RuntimeError as exc:
-            problems.append(str(exc))
         if problems:
             raise RuntimeError("Editor layout failed: " + "; ".join(problems))
 
@@ -561,10 +682,15 @@ class EditorWindow(QMainWindow):
         self._refresh_status_tool()
 
     def _on_tool_changed(self, tool: str):
+        if tool == "fill":
+            self._sidebar.set_tool_name("Fill", 0)
+            return
         self._scene.set_tool(tool)
         self._toolbar.set_tool(tool)
+        if getattr(self, "_bar", None) is not None:
+            self._bar.set_tool(tool)
         self._options.refresh()
-        self._refresh_status_tool()
+        self._sidebar.set_tool_name(tool, len(self._scene.selectedItems()))
 
     def _refresh_status_tool(self):
         if getattr(self, "_status_tool", None) is None:

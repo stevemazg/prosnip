@@ -49,11 +49,11 @@ def capture_demo_screenshots(folder: Path) -> int:
         editor.assert_tools_left_of_canvas()
         log.info(
             "Tool panel x=%s canvas x=%s panel=%sx%s tools=%s",
-            editor._toolbar.mapTo(editor, editor._toolbar.rect().topLeft()).x(),
-            editor._view.mapTo(editor, editor._view.rect().topLeft()).x(),
-            editor._toolbar.width(),
-            editor._toolbar.height(),
-            len(editor._toolbar._tool_buttons),
+            editor._bar.mapTo(editor, editor._bar.rect().topLeft()).y(),
+            editor._view.mapTo(editor, editor._view.rect().topLeft()).y(),
+            editor._bar.width(),
+            editor._bar.height(),
+            len(editor._bar._buttons),
         )
         saved.append(_grab(editor, folder / "02-editor.png"))
         saved.append(_colour_menu(editor, folder / "03-colour-dropdown.png"))
@@ -63,7 +63,7 @@ def capture_demo_screenshots(folder: Path) -> int:
         saved.append(_text_background(folder / "09-text-background.png"))
         saved.append(_image_placeholder(editor, folder / "10-image-placeholder.png"))
         saved.append(_toolbar_tooltip(editor, folder / "11-toolbar-tooltip.png"))
-        saved.append(_grab(editor._toolbar, folder / "12-toolbar.png"))
+        saved.append(_grab(editor._bar, folder / "12-toolbar.png"))
         saved.append(_picker_loupe(folder / "13-picker-loupe.png"))
         saved.append(_small_editor(folder / "14-editor-small.png"))
         saved.append(_colour_card(folder / "15-colour-card.png"))
@@ -79,6 +79,15 @@ def capture_demo_screenshots(folder: Path) -> int:
         saved.append(_shape_options(folder / "25-shape-options.png"))
         saved.append(_transparent_popup(folder / "26-transparent-popup.png"))
         saved.append(_shape_fills(folder / "27-shape-fills.png"))
+        saved.append(_editor_theme(folder / "30-editor-1024-light.png", 1024, 680, "light"))
+        saved.append(_editor_theme(folder / "31-editor-1024-dark.png", 1024, 680, "dark"))
+        saved.append(_editor_theme(folder / "32-editor-1920-light.png", 1920, 1080, "light"))
+        saved.append(_editor_theme(folder / "33-editor-1920-dark.png", 1920, 1080, "dark"))
+        saved.append(_more_menu(folder / "34-more-menu.png"))
+        saved.append(_sidebar_tool(folder / "35-sidebar-arrow.png", "arrow"))
+        saved.append(_sidebar_tool(folder / "36-sidebar-callout.png", "callout"))
+        saved.append(_recent_tray(folder / "37-recents-tray.png"))
+        saved.append(_canvas_demo(folder / "38-canvas-demo.png"))
         _assert_sizes()
         editor.close()
     except Exception:
@@ -148,7 +157,7 @@ def _editor_window():
     scene.addItem(highlight)
     scene.addItem(ArrowItem(QPointF(500, 120), QPointF(760, 210), QColor("#1d3557"), 3))
     scene.addItem(TextItem("Reviewed", QPointF(520, 240), QColor("#e63946"), 20))
-    window._toolbar.set_tool("pen")
+    window._on_tool_changed("pen")
     return window
 
 
@@ -241,7 +250,10 @@ def _image_placeholder(editor, path: Path) -> Path:
 def _toolbar_tooltip(editor, path: Path) -> Path:
     from PyQt6.QtWidgets import QToolTip
 
-    button = editor._toolbar._tool_buttons["arrow"]
+    button = editor._bar.button("arrow")
+    if button is None:
+        editor._on_tool_changed("arrow")
+        button = editor._bar.button("arrow")
     editor.show()
     app = QApplication.instance()
     if app is not None:
@@ -448,12 +460,82 @@ def _shape_fills(path: Path) -> Path:
         window.close()
 
 
+def _editor_theme(path: Path, width: int, height: int, mode: str) -> Path:
+    from theme import apply_theme
+
+    window = _editor_window()
+    window._theme = apply_theme(mode)
+    window._apply_workspace()
+    _present(window, width, height)
+    try:
+        return _grab(window, path)
+    finally:
+        window.close()
+
+
+def _more_menu(path: Path) -> Path:
+    window = _editor_window()
+    _present(window, 1024, 680)
+    menu = window._bar.more_menu
+    menu.popup(window._bar._more.mapToGlobal(QPoint(0, window._bar._more.height())))
+    app = QApplication.instance()
+    if app is not None:
+        app.processEvents()
+    try:
+        return _grab(menu, path)
+    finally:
+        menu.close()
+        window.close()
+
+
+def _sidebar_tool(path: Path, tool: str) -> Path:
+    window = _editor_window()
+    _present(window, 1024, 680)
+    window._on_tool_changed(tool)
+    try:
+        return _grab(window._sidebar, path)
+    finally:
+        window.close()
+
+
+def _recent_tray(path: Path) -> Path:
+    from PIL import Image as PILImage
+
+    window = _editor_window()
+    _present(window, 1024, 680)
+    for name, colour in (("one", "#d7e6f5"), ("two", "#fff7e8"), ("three", "#e8f5e9")):
+        window._tray.remember(PILImage.new("RGB", (320, 180), colour), name)
+    try:
+        return _grab(window, path)
+    finally:
+        window.close()
+
+
+def _canvas_demo(path: Path) -> Path:
+    from items import ArrowItem, CalloutItem, NumberItem, StrokeItem
+
+    window = _editor_window()
+    _present(window, 1024, 680)
+    window._scene.addItem(ArrowItem(QPointF(80, 120), QPointF(280, 180), QColor("#e00000"), 4))
+    window._scene.addItem(CalloutItem(QPointF(320, 100), QColor("#3949ab"), QColor(255, 255, 255, 230), QColor("#1a1d21"), 2, 16))
+    window._scene.addItem(NumberItem(1, QPointF(120, 220), QColor("#e00000")))
+    window._scene.addItem(NumberItem(2, QPointF(200, 260), QColor("#2f9e44")))
+    blur = StrokeItem(QColor("#f4a261"), 18, highlighter=True)
+    blur.add_point(QPointF(80, 320))
+    blur.add_point(QPointF(360, 340))
+    window._scene.addItem(blur)
+    try:
+        return _grab(window, path)
+    finally:
+        window.close()
+
+
 def _assert_sizes() -> None:
     window = _editor_window()
     try:
         for width, height in ((900, 600), (1024, 680), (1920, 1080)):
             _present(window, width, height)
-            log.info("Layout %sx%s options=%s tools=%s", width, height, window._top_bar.height(), window._toolbar.height())
+            log.info("Layout %sx%s toolbar=%s sidebar=%s", width, height, window._bar.height(), window._sidebar.width())
     finally:
         window.close()
 

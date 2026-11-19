@@ -9,9 +9,10 @@ from PyQt6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
 
 import demo_screenshots
 from capture import CaptureOverlay
+from colour import ColourHistory
 from colour_card import show_colour_card
 from editor import APP_NAME, APP_VERSION, EditorWindow
-from theme import apply_dark_theme
+from theme import apply_theme
 from hotkey import (
     PICK_HOTKEY_ID,
     PICK_HOTKEY_MODIFIERS,
@@ -177,7 +178,7 @@ class ProSnipApp:
         self._app.setQuitOnLastWindowClosed(False)
         self._app.setApplicationName(APP_NAME)
         self._app.setApplicationVersion(APP_VERSION)
-        apply_dark_theme(self._app)
+        apply_theme(ColourHistory().theme, self._app)
 
         self.forwarded = False
         self._signals = AppSignals()
@@ -405,13 +406,11 @@ class ProSnipApp:
         try:
             if show_colour_card(hex_code, self._main_window):
                 SwatchBook().add(hex_code)
-            for editor in list(self._editors):
-                editor._swatch_panel.reload()
             if target is None:
                 return
             colour = QColor(hex_code)
             target._toolbar.set_pen_colour(colour)
-            target._scene.set_pen_color(colour)
+            target._options.set_border_colour(colour)
         except Exception:
             log.exception("Could not apply the picked colour")
 
