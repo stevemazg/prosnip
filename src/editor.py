@@ -27,7 +27,7 @@ from pathlib import Path
 from PIL import Image, ImageOps
 
 APP_NAME = "ProSnip-Bob"
-APP_VERSION = "1.7.0.0"
+APP_VERSION = "1.7.1.0"
 
 
 def clamp_crop_rect(rect: QRectF, width: int, height: int) -> QRect | None:

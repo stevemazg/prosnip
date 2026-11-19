@@ -76,6 +76,9 @@ def capture_demo_screenshots(folder: Path) -> int:
         saved.append(_colour_popup(folder / "22-colour-popup.png"))
         saved.append(_arrange_menu(folder / "23-arrange-menu.png"))
         saved.append(_sized_editor(folder / "24-editor-1920.png", 1920, 1080, select_step=False))
+        saved.append(_shape_options(folder / "25-shape-options.png"))
+        saved.append(_transparent_popup(folder / "26-transparent-popup.png"))
+        saved.append(_shape_fills(folder / "27-shape-fills.png"))
         _assert_sizes()
         editor.close()
     except Exception:
@@ -392,6 +395,56 @@ def _arrange_menu(path: Path) -> Path:
         return _grab(menu, path)
     finally:
         menu.close()
+        window.close()
+
+
+def _shape_options(path: Path) -> Path:
+    window = _editor_window()
+    _present(window, 1024, 680)
+    window._options.set_border_colour(QColor("#e63946"))
+    window._options.set_fill_colour(QColor("#e63946"), transparent=True)
+    window._on_tool_changed("rect")
+    window._options.refresh()
+    try:
+        return _grab(window, path)
+    finally:
+        window.close()
+
+
+def _transparent_popup(path: Path) -> Path:
+    window = _editor_window()
+    _present(window, 1024, 680)
+    window._options.set_border_colour(QColor("#e63946"))
+    window._options.set_fill_colour(QColor("#e63946"), transparent=True)
+    window._on_tool_changed("rect")
+    menu = window._options.open_colour_menu("fill")
+    app = QApplication.instance()
+    if app is not None:
+        app.processEvents()
+    menu.adjustSize()
+    try:
+        return _grab(menu, path)
+    finally:
+        menu.close()
+        window.close()
+
+
+def _shape_fills(path: Path) -> Path:
+    from items import RectItem
+    from options import _alpha
+
+    window = _editor_window()
+    _present(window, 1024, 680)
+    window._scene.addItem(RectItem(
+        QRectF(70, 110, 220, 130), QColor("#e63946"), QColor(0, 0, 0, 0), 4,
+    ))
+    window._scene.addItem(RectItem(
+        QRectF(340, 110, 220, 130), QColor("#e63946"), QColor(230, 57, 70, _alpha(30)), 4,
+    ))
+    window._on_tool_changed("select")
+    try:
+        return _grab(window, path)
+    finally:
         window.close()
 
 

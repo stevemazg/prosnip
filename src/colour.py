@@ -23,6 +23,14 @@ def _channel(value) -> int:
     return max(0, min(255, number))
 
 
+def _percent(value, default: int) -> int:
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return default
+    return max(0, min(100, number))
+
+
 def rgb_to_hsl(red: int, green: int, blue: int) -> tuple[int, int, int]:
     """Return hue 0–360, saturation percent, and lightness percent."""
     red, green, blue = _channel(red), _channel(green), _channel(blue)
@@ -105,6 +113,10 @@ class ColourHistory:
         self.colours: list[str] = []
         self.auto_copy = False
         self.last_folder = ""
+        self.border_colour = "#E63946"
+        self.fill_colour = "#E63946"
+        self.fill_opacity = 0
+        self.border_opacity = 100
         self._extra: dict = {}
         self.load()
 
@@ -115,13 +127,20 @@ class ColourHistory:
         self._extra = {
             key: value
             for key, value in data.items()
-            if key not in {"colour_format", "loupe_zoom", "recent_colours", "auto_copy", "last_folder"}
+            if key not in {
+            "colour_format", "loupe_zoom", "recent_colours", "auto_copy", "last_folder",
+            "border_colour", "fill_colour", "fill_opacity", "border_opacity",
+        }
         }
         fmt = data.get("colour_format", "hex")
         self.format = fmt if fmt in FORMATS else "hex"
         self.zoom = clamp_zoom(data.get("loupe_zoom", ZOOM_DEFAULT))
         self.auto_copy = bool(data.get("auto_copy", False))
         self.last_folder = str(data.get("last_folder", "") or "")
+        self.border_colour = str(data.get("border_colour") or "#E63946")
+        self.fill_colour = str(data.get("fill_colour") or "#E63946")
+        self.fill_opacity = _percent(data.get("fill_opacity", 0), 0)
+        self.border_opacity = _percent(data.get("border_opacity", 100), 100)
         colours = []
         for item in data.get("recent_colours", []):
             parsed = parse_hex(str(item))
@@ -140,11 +159,22 @@ class ColourHistory:
             "recent_colours": list(self.colours),
             "auto_copy": self.auto_copy,
             "last_folder": self.last_folder,
+            "border_colour": self.border_colour,
+            "fill_colour": self.fill_colour,
+            "fill_opacity": self.fill_opacity,
+            "border_opacity": self.border_opacity,
         })
         _write_json(self.path, payload)
 
     def set_auto_copy(self, enabled: bool) -> None:
         self.auto_copy = bool(enabled)
+        self.save()
+
+    def set_shape_style(self, border: str, fill: str, fill_opacity: int, border_opacity: int) -> None:
+        self.border_colour = str(border or "#E63946")
+        self.fill_colour = str(fill or "#E63946")
+        self.fill_opacity = _percent(fill_opacity, 0)
+        self.border_opacity = _percent(border_opacity, 100)
         self.save()
 
     def set_last_folder(self, folder: str) -> None:

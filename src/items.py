@@ -224,8 +224,8 @@ class ResizableMixin:
 class RectItem(ResizableMixin, QGraphicsRectItem):
     def __init__(self, rect: QRectF, pen_color: QColor, fill_color: QColor, line_width: int):
         super().__init__(rect)
-        self.pen_color = pen_color
-        self.fill_color = fill_color
+        self.pen_color = QColor(pen_color)
+        self.fill_color = QColor(fill_color)
         self.line_width = line_width
         self.stroke_enabled = True
         self._apply_style()
@@ -279,8 +279,8 @@ class RectItem(ResizableMixin, QGraphicsRectItem):
 class EllipseItem(ResizableMixin, QGraphicsEllipseItem):
     def __init__(self, rect: QRectF, pen_color: QColor, fill_color: QColor, line_width: int):
         super().__init__(rect)
-        self.pen_color = pen_color
-        self.fill_color = fill_color
+        self.pen_color = QColor(pen_color)
+        self.fill_color = QColor(fill_color)
         self.line_width = line_width
         self.stroke_enabled = True
         self._apply_style()
@@ -563,9 +563,9 @@ class CalloutItem(QGraphicsItem):
     def __init__(self, pos: QPointF, pen_color: QColor, fill_color: QColor,
                  text_color: QColor, line_width: int, font_size: int):
         super().__init__()
-        self.pen_color = pen_color
-        self.fill_color = fill_color
-        self.text_color = text_color
+        self.pen_color = QColor(pen_color)
+        self.fill_color = QColor(fill_color)
+        self.text_color = QColor(text_color)
         self.line_width = line_width
         self.font_size = font_size
         self.stroke_enabled = True

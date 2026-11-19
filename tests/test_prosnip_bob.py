@@ -349,7 +349,7 @@ class LauncherTests(unittest.TestCase):
         labels = [label.text() for label in window.findChildren(main_window.QLabel)]
         self.assertIn("ProSnip-Bob", labels)
         self.assertIn(f"Version {editor.APP_VERSION}", labels)
-        self.assertEqual(editor.APP_VERSION, "1.7.0.0")
+        self.assertEqual(editor.APP_VERSION, "1.7.1.0")
         self.assertEqual(window.new_capture_button.text(), "New Capture")
         self.assertEqual(window.quit_button.text(), "Quit")
         self.assertIn("this system", window.shortcut_label.text())
@@ -631,8 +631,8 @@ class AppTests(unittest.TestCase):
             "Steve Maz",
             "ProSnip-Bob",
             "ProSnip-Bob screen capture and annotation tool",
-            "1.7.0.0",
-            "(1, 7, 0, 0)",
+            "1.7.1.0",
+            "(1, 7, 1, 0)",
             "ProSnip-Bob.exe",
             "Copyright (C) 2026 Steve Maz",
         ):
@@ -705,6 +705,87 @@ class ColourAndPenTests(unittest.TestCase):
         options.bind(scene, toolbar.ToolBar())
         options.apply_named_style("Blue")
         self.assertEqual(scene._pen_color.name(), STYLES["Blue"].pen_color.name())
+
+    def test_new_rectangle_has_no_fill_and_transparent_is_in_the_popup(self):
+        import tempfile
+
+        from colour import ColourHistory
+        from options import ToolOptions, _alpha
+        from PyQt6.QtWidgets import QLabel
+
+        class _Event:
+            def __init__(self, x, y):
+                self._pos = QPointF(x, y)
+
+            def button(self):
+                return Qt.MouseButton.LeftButton
+
+            def scenePos(self):
+                return self._pos
+
+            def accept(self):
+                return None
+
+        with tempfile.TemporaryDirectory() as tmp:
+            history = ColourHistory(Path(tmp) / "settings.json")
+            options = ToolOptions(history)
+            menu = options.build_colour_menu()
+            tips = [widget.toolTip() for widget in menu.findChildren(QWidget)]
+            labels = [widget.text() for widget in menu.findChildren(QLabel) if hasattr(widget, "text")]
+            self.assertIn("Transparent", tips)
+            self.assertIn("Transparent", labels)
+            scene = canvas.ProSnipScene()
+            options.bind(scene, toolbar.ToolBar())
+            self.assertEqual(scene._fill_color.alpha(), 0)
+            scene.set_tool("rect")
+            scene.mousePressEvent(_Event(10, 12))
+            scene.mouseReleaseEvent(_Event(90, 70))
+            rects = [item for item in scene.items() if isinstance(item, items.RectItem)]
+            self.assertEqual(len(rects), 1)
+            self.assertEqual(rects[0].fill_color.alpha(), 0)
+            self.assertEqual(rects[0].pen_color.name(), "#e63946")
+            self.assertEqual(rects[0].pen_color.alpha(), 255)
+            rects[0].setSelected(True)
+            options.set_fill_colour(QColor("#3d8ee6"))
+            self.assertEqual(options._fill_opacity, 30)
+            self.assertEqual(rects[0].fill_color.alpha(), _alpha(30))
+            self.assertEqual(rects[0].pen_color.alpha(), 255)
+            scene.undo()
+            self.assertEqual(rects[0].fill_color.alpha(), 0)
+            reloaded = ColourHistory(history.path)
+            self.assertEqual(reloaded.fill_opacity, 0)
+            self.assertEqual(reloaded.border_colour.upper(), "#E63946")
+
+    def test_shape_fills_render_transparent_and_translucent(self):
+        from PyQt6.QtWidgets import QGraphicsPixmapItem
+
+        from options import _alpha
+
+        scene = canvas.ProSnipScene()
+        scene.setBackgroundBrush(QBrush(Qt.GlobalColor.transparent))
+        background = QPixmap(160, 80)
+        background.fill(QColor("#00c853"))
+        plate = QGraphicsPixmapItem(background)
+        plate.setZValue(-100)
+        scene.addItem(plate)
+        scene.setSceneRect(0, 0, 160, 80)
+        scene.addItem(items.RectItem(
+            QRectF(8, 8, 60, 60), QColor("#e63946"), QColor(0, 0, 0, 0), 3,
+        ))
+        scene.addItem(items.RectItem(
+            QRectF(90, 8, 60, 60), QColor("#e63946"), QColor(230, 57, 70, _alpha(30)), 3,
+        ))
+        image = QImage(160, 80, QImage.Format.Format_ARGB32)
+        image.fill(QColor("#00c853"))
+        painter = QPainter(image)
+        scene.render(painter)
+        painter.end()
+        clear = image.pixelColor(38, 38)
+        tinted = image.pixelColor(120, 38)
+        self.assertGreater(clear.green(), 180)
+        self.assertLess(clear.red(), 40)
+        self.assertGreater(tinted.red(), clear.red() + 30)
+        self.assertGreater(tinted.green(), 80)
 
     def test_pen_stroke_can_be_undone_and_redone(self):
         scene = canvas.ProSnipScene()

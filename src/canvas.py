@@ -24,6 +24,7 @@ class ProSnipScene(QGraphicsScene):
     colour_picked = pyqtSignal(QColor)
     numbers_changed = pyqtSignal(int)
     number_edit_requested = pyqtSignal(object)
+    style_changed = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -37,9 +38,9 @@ class ProSnipScene(QGraphicsScene):
         self._crop_rect_item = None
 
         # Style params
-        self._pen_color = DEFAULT_STYLE.pen_color
-        self._fill_color = DEFAULT_STYLE.fill_color
-        self._text_color = DEFAULT_STYLE.text_color
+        self._pen_color = QColor(DEFAULT_STYLE.pen_color)
+        self._fill_color = QColor(0, 0, 0, 0)
+        self._text_color = QColor(DEFAULT_STYLE.text_color)
         self._line_width = DEFAULT_STYLE.line_width
         self._font_size = DEFAULT_STYLE.font_size
         self.arrow_style = "plain"
@@ -54,10 +55,10 @@ class ProSnipScene(QGraphicsScene):
         self._tool = tool
 
     def set_pen_color(self, color: QColor):
-        self._pen_color = color
+        self._pen_color = QColor(color)
 
     def set_fill_color(self, color: QColor):
-        self._fill_color = color
+        self._fill_color = QColor(color)
 
     def set_text_color(self, color: QColor):
         self._text_color = color
@@ -153,6 +154,7 @@ class ProSnipScene(QGraphicsScene):
             self.removeItem(entry)
         self._redo_stack.append(entry)
         self.sync_next_number()
+        self.style_changed.emit()
 
     def redo(self):
         if not self._redo_stack:
@@ -164,6 +166,24 @@ class ProSnipScene(QGraphicsScene):
             self.addItem(entry)
         self._undo_stack.append(entry)
         self.sync_next_number()
+        self.style_changed.emit()
+
+    def close_style_edit(self) -> None:
+        if self._undo_stack and isinstance(self._undo_stack[-1], _StyleCommand):
+            self._undo_stack[-1].open = False
+
+    def edit_style(self, item, mutate) -> None:
+        """Apply a colour or opacity change that can be undone as one step."""
+        top = self._undo_stack[-1] if self._undo_stack else None
+        if isinstance(top, _StyleCommand) and top.item is item and top.open:
+            mutate()
+            top.after = _style_snapshot(item)
+            return
+        before = _style_snapshot(item)
+        mutate()
+        command = _StyleCommand(item, before, _style_snapshot(item))
+        self._undo_stack.append(command)
+        self._redo_stack.clear()
 
     def copy_selected(self):
         self._clipboard = [item for item in self.selectedItems() if item.parentItem() is None]
@@ -663,6 +683,48 @@ def _svg_pixmap(path: str, width: int, height: int) -> QPixmap:
     renderer.render(painter)
     painter.end()
     return pixmap
+
+
+class _StyleCommand:
+    def __init__(self, item, before, after):
+        self.item = item
+        self.before = before
+        self.after = after
+        self.open = True
+
+    def undo(self, scene):
+        self.open = False
+        _restore_style(self.item, self.before)
+
+    def redo(self, scene):
+        _restore_style(self.item, self.after)
+
+
+def _style_snapshot(item) -> dict:
+    fill = getattr(item, "fill_color", None)
+    pen = getattr(item, "pen_color", None)
+    return {
+        "pen": QColor(pen) if pen is not None else None,
+        "fill": QColor(fill) if fill is not None else None,
+        "width": getattr(item, "line_width", None),
+        "stroke": getattr(item, "stroke_enabled", None),
+        "opacity": item.opacity(),
+    }
+
+
+def _restore_style(item, snap: dict) -> None:
+    if snap["pen"] is not None and hasattr(item, "pen_color"):
+        item.pen_color = QColor(snap["pen"])
+    if snap["fill"] is not None and hasattr(item, "fill_color"):
+        item.fill_color = QColor(snap["fill"])
+    if snap["width"] is not None and hasattr(item, "line_width"):
+        item.line_width = snap["width"]
+    if snap["stroke"] is not None and hasattr(item, "stroke_enabled"):
+        item.stroke_enabled = snap["stroke"]
+    item.setOpacity(snap["opacity"])
+    if hasattr(item, "_apply_style"):
+        item._apply_style()
+    item.update()
 
 
 class _AddCommand:
