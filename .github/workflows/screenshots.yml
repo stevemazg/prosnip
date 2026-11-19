@@ -89,7 +89,8 @@ jobs:
             "41-sidebar-pen.png",
             "37-recents-tray.png",
             "38-canvas-demo.png",
-            "42-new-tools.png"
+            "42-new-tools.png",
+            "43-three-captures.png"
           )) {
             $file = Join-Path screenshots $name
             if (-not (Test-Path $file)) { throw "Missing $name" }

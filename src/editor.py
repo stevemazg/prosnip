@@ -24,10 +24,13 @@ from theme import apply_theme, colours_for, resolved_mode
 from toolbar import ToolBar
 
 import io
+import logging
 import math
 from datetime import datetime
 from pathlib import Path
 from PIL import Image, ImageOps
+
+log = logging.getLogger("prosnip")
 
 APP_NAME = "ProSnip-Bob"
 APP_VERSION = "1.8.1.0"
@@ -146,6 +149,8 @@ class EditorWindow(QMainWindow):
         self._did_fit = False
 
         self._placing_tools = False
+        self._documents = {}
+        self._active_path = None
         self._scene = ProSnipScene()
         self._view = ProSnipView(self._scene)
         self._toolbar = ToolBar()
@@ -342,17 +347,90 @@ class EditorWindow(QMainWindow):
         self._scene.setSceneRect(QRectF(pixmap.rect()))
 
     def _open_recent(self, path: str):
-        if not path:
+        """Show a tray capture in this same window, restoring its annotations."""
+        if not path or path == self._active_path:
+            self._tray.mark_selected(self._active_path or path)
             return
-        image = Image.open(path).convert("RGB")
-        self._replace_pixmap(pil_to_qpixmap(image), image)
+        self._stash_active()
+        self._active_path = path
+        document = self._documents.get(path)
+        if document is not None:
+            image = document["image"]
+            self._replace_pixmap(pil_to_qpixmap(image), image)
+            for item in document["annotations"]:
+                self._scene.addItem(item)
+            self._scene._undo_stack = list(document["undo"])
+            self._scene._redo_stack = list(document["redo"])
+            self._scene.set_next_number(document["next"])
+        else:
+            try:
+                image = Image.open(path).convert("RGB")
+            except (OSError, ValueError):
+                log.exception("Could not open the capture %s", path)
+                return
+            self._replace_pixmap(pil_to_qpixmap(image), image)
+            self._scene._undo_stack.clear()
+            self._scene._redo_stack.clear()
+            self._scene.sync_next_number()
+        self._tray.mark_selected(path)
         self._show_library(False)
+        self.raise_()
+        self.activateWindow()
 
-    def _remember_capture(self):
+    def _remember_capture(self, title: str | None = None) -> str | None:
         try:
-            self._tray.remember(self._pil_image, datetime.now().strftime("capture-%H%M%S"))
+            label = title or datetime.now().strftime("capture-%H%M%S")
+            path = self._tray.remember(self._pil_image, label)
         except Exception:
-            pass
+            log.exception("Could not add the capture to the tray")
+            return None
+        self._active_path = path
+        self._tray.mark_selected(path)
+        return path
+
+    def receive_capture(self, pil_image: Image.Image, title: str | None = None):
+        """Put a new snip in this window and keep the previous one on its tray card."""
+        self._stash_active()
+        image = pil_image.copy()
+        self._replace_pixmap(pil_to_qpixmap(image), image)
+        self._scene._undo_stack.clear()
+        self._scene._redo_stack.clear()
+        self._scene.sync_next_number()
+        self._filename = None
+        self.setWindowTitle(f"{APP_NAME} — Untitled")
+        self._remember_capture(title)
+        self._show_library(False)
+        if self.isMinimized():
+            self.showNormal()
+        self.show()
+        self.raise_()
+        self.activateWindow()
+
+    def _stash_active(self):
+        path = self._active_path
+        if not path:
+            self._detach_annotations()
+            return
+        self._documents[path] = {
+            "image": self._pil_image.copy(),
+            "annotations": self._detach_annotations(),
+            "undo": list(self._scene._undo_stack),
+            "redo": list(self._scene._redo_stack),
+            "next": self._scene._next_number,
+        }
+        self._scene._undo_stack.clear()
+        self._scene._redo_stack.clear()
+
+    def _detach_annotations(self):
+        kept = []
+        for item in list(self._scene.items()):
+            if item.parentItem() is not None or item is self._bg_item:
+                continue
+            if isinstance(item, QGraphicsPixmapItem) and item.zValue() < 0:
+                continue
+            self._scene.removeItem(item)
+            kept.append(item)
+        return kept
 
     def _select_tool_objects(self):
         kinds = {

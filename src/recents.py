@@ -1,10 +1,12 @@
 """Recent captures tray. Files stay in the library folder when a card is removed."""
 
 import json
+import time
 from pathlib import Path
 
-from PyQt6.QtCore import QByteArray, QMimeData, Qt, pyqtSignal
-from PyQt6.QtGui import QDrag, QPixmap
+from PyQt6 import sip
+from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtGui import QPixmap
 from PyQt6.QtWidgets import QHBoxLayout, QLabel, QScrollArea, QToolButton, QVBoxLayout, QWidget
 
 CARD_W = 128
@@ -34,6 +36,7 @@ class RecentTray(QWidget):
         self.setObjectName("RecentTray")
         self.setFixedHeight(TRAY_H)
         self._selected = set()
+        self._current = ""
         outer = QVBoxLayout(self)
         outer.setContentsMargins(6, 4, 6, 4)
         outer.setSpacing(0)
@@ -63,92 +66,94 @@ class RecentTray(QWidget):
 
     def remember(self, image: Image.Image, title: str) -> str:
         folder = library_dir()
-        stamp = title or "capture"
-        ident = f"{stamp}"
+        stamp = _safe_name(title or "capture")
+        ident = stamp
         index = 1
-        while (folder / f"{ident}.png").exists():
+        while (folder / f"{ident}.png").exists() or (folder / f"{ident}.json").exists():
             index += 1
-            ident = f"{title}-{index}"
+            ident = f"{stamp}-{index}"
         path = folder / f"{ident}.png"
         image.save(path, "PNG")
-        meta = {"title": title, "pinned": False, "unsaved": True, "path": str(path)}
+        meta = {
+            "title": title or ident,
+            "pinned": False,
+            "unsaved": True,
+            "path": str(path),
+            "created": time.time(),
+        }
         (folder / f"{ident}.json").write_text(json.dumps(meta), encoding="utf-8")
+        self._current = str(path)
         self.reload()
         return str(path)
+
+    def card_count(self) -> int:
+        total = 0
+        for index in range(self._row.count()):
+            widget = self._row.itemAt(index).widget()
+            if widget is not None and not sip.isdeleted(widget):
+                total += 1
+        return total
 
     def reload(self):
         while self._row.count():
             item = self._row.takeAt(0)
             widget = item.widget()
-            if widget is not None:
-                widget.setObjectName("")
-                widget.deleteLater()
+            if widget is None:
+                continue
+            widget.hide()
+            widget.setParent(None)
+            widget.deleteLater()
         folder = library_dir()
         cards = []
-        for meta_path in sorted(folder.glob("*.json")):
+        for meta_path in folder.glob("*.json"):
             try:
                 meta = json.loads(meta_path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
                 continue
             if meta.get("hidden"):
                 continue
-            cards.append((bool(meta.get("pinned")), meta_path, meta))
-        cards.sort(key=lambda item: (not item[0], item[1].name))
-        for _pinned, meta_path, meta in cards[:30]:
+            created = float(meta.get("created") or meta_path.stat().st_mtime)
+            cards.append((bool(meta.get("pinned")), created, meta_path, meta))
+        cards.sort(key=lambda item: (not item[0], -item[1]))
+        shown = cards[:30]
+        for _pinned, _created, meta_path, meta in shown:
             self._row.addWidget(self._card(meta_path, meta))
-        width = max(CARD_W, 8 + len(cards[:30]) * (CARD_W + 8))
+        width = max(CARD_W, 8 + len(shown) * (CARD_W + 8))
         self._host.setFixedHeight(CARD_H)
         self._host.setMinimumWidth(width)
+        if self._current:
+            self.mark_selected(self._current)
+
+    def mark_selected(self, path: str):
+        self._current = path or ""
+        chosen = None
+        for index in range(self._row.count()):
+            card = self._row.itemAt(index).widget()
+            if card is None or sip.isdeleted(card):
+                continue
+            selected = bool(path) and card.property("imagePath") == path
+            card.setProperty("selected", selected)
+            card.setStyleSheet(
+                "QWidget#RecentCard { background-color: #c7d2fe; border: 3px solid #3730a3; }"
+                if selected
+                else "QWidget#RecentCard { background-color: transparent; border: 3px solid transparent; }"
+            )
+            if selected:
+                chosen = card
+        if chosen is not None:
+            self._scroll.ensureWidgetVisible(chosen)
 
     def _card(self, meta_path: Path, meta: dict) -> QWidget:
-        card = QWidget()
-        card.setObjectName("RecentCard")
-        card.setFixedSize(CARD_W, CARD_H)
-        layout = QVBoxLayout(card)
-        layout.setContentsMargins(4, 4, 4, 4)
-        layout.setSpacing(2)
-        thumb = QLabel()
-        thumb.setFixedSize(CARD_W - 8, THUMB_H)
-        thumb.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        path = meta.get("path") or ""
-        pix = QPixmap(path)
+        card = RecentCard(meta.get("path") or "", meta.get("title") or meta_path.stem, self._host)
+        card.setProperty("imagePath", meta.get("path") or "")
+        pix = QPixmap(meta.get("path") or "")
         if not pix.isNull():
-            thumb.setPixmap(pix.scaled(
-                CARD_W - 8, THUMB_H,
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
-            ))
-        layout.addWidget(thumb)
-        title = meta.get("title") or meta_path.stem
-        caption = QLabel(title)
-        caption.setObjectName("RecentCaption")
-        caption.setFixedHeight(CAPTION_H)
-        caption.setToolTip(title)
-        layout.addWidget(caption)
-        pin = QToolButton(card)
-        pin.setText("•" if not meta.get("pinned") else "●")
-        pin.setToolTip("Pin")
-        pin.setAutoRaise(True)
-        pin.setFixedSize(16, 16)
-        pin.setGeometry(4, 4, 16, 16)
-        pin.hide()
-        pin.clicked.connect(lambda _checked=False, source=meta_path: self._pin(source))
-        close = QToolButton(card)
-        close.setText("×")
-        close.setToolTip("Remove from tray")
-        close.setAutoRaise(True)
-        close.setFixedSize(16, 16)
-        close.setGeometry(CARD_W - 20, 4, 16, 16)
-        close.hide()
-        close.clicked.connect(lambda _checked=False, source=meta_path: self._hide(source))
-        for button in (pin, close):
-            button.setStyleSheet(
-                "QToolButton { border: none; padding: 0; background: rgba(255,255,255,220); color: #1a1d21; }"
-            )
-        card.enterEvent = lambda _event, a=pin, b=close: (a.show(), b.show())
-        card.leaveEvent = lambda _event, a=pin, b=close: (a.hide(), b.hide())
-        card.mousePressEvent = lambda _event, image_path=path: self.opened.emit(image_path)
-        card.setProperty("imagePath", path)
+            card.set_pixmap(pix)
+        card.pin_clicked.connect(lambda source=meta_path: self._pin(source))
+        card.close_clicked.connect(lambda source=meta_path: self._hide(source))
+        card.activated.connect(self.opened.emit)
+        if meta.get("pinned"):
+            card._pin.setText("●")
         return card
 
     def _hide(self, meta_path: Path):
@@ -162,6 +167,84 @@ class RecentTray(QWidget):
         meta["pinned"] = not bool(meta.get("pinned"))
         meta_path.write_text(json.dumps(meta), encoding="utf-8")
         self.reload()
+
+
+def _safe_name(title: str) -> str:
+    cleaned = "".join(ch if ch.isalnum() or ch in "-_" else "-" for ch in title).strip("-")
+    return cleaned or "capture"
+
+
+class RecentCard(QWidget):
+    """One tray thumbnail. Events stay on the widget so a reload cannot call a dead button."""
+
+    activated = pyqtSignal(str)
+    pin_clicked = pyqtSignal()
+    close_clicked = pyqtSignal()
+
+    def __init__(self, path: str, title: str, parent=None):
+        super().__init__(parent)
+        self._path = path
+        self.setObjectName("RecentCard")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setFixedSize(CARD_W, CARD_H)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setSpacing(2)
+        self._thumb = QLabel()
+        self._thumb.setFixedSize(CARD_W - 8, THUMB_H)
+        self._thumb.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self._thumb)
+        caption = QLabel(title)
+        caption.setObjectName("RecentCaption")
+        caption.setFixedHeight(CAPTION_H)
+        caption.setToolTip(title)
+        layout.addWidget(caption)
+        self._pin = self._button("•", "Pin", 4)
+        self._close = self._button("×", "Remove from tray", CARD_W - 20)
+        self._pin.clicked.connect(self.pin_clicked.emit)
+        self._close.clicked.connect(self.close_clicked.emit)
+
+    def set_pixmap(self, pix: QPixmap):
+        self._thumb.setPixmap(pix.scaled(
+            CARD_W - 8, THUMB_H,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        ))
+
+    def _button(self, text: str, tip: str, x: int) -> QToolButton:
+        button = QToolButton(self)
+        button.setText(text)
+        button.setToolTip(tip)
+        button.setAutoRaise(True)
+        button.setFixedSize(16, 16)
+        button.setGeometry(x, 4, 16, 16)
+        button.hide()
+        button.setStyleSheet(
+            "QToolButton { border: none; padding: 0; background: rgba(255,255,255,220); color: #1a1d21; }"
+        )
+        return button
+
+    def _alive(self, widget) -> bool:
+        return widget is not None and not sip.isdeleted(widget)
+
+    def enterEvent(self, event):
+        if self._alive(self._pin):
+            self._pin.show()
+        if self._alive(self._close):
+            self._close.show()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        if self._alive(self._pin):
+            self._pin.hide()
+        if self._alive(self._close):
+            self._close.hide()
+        super().leaveEvent(event)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and self._path:
+            self.activated.emit(self._path)
+        super().mousePressEvent(event)
 
 
 def _icon(pix: QPixmap):

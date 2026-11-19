@@ -528,24 +528,85 @@ class AppTests(unittest.TestCase):
         self.assertEqual(hidden, [])
         self.assertFalse(host._capture_pending)
 
-    def test_editors_stay_alive_until_they_are_closed(self):
+    def test_three_captures_share_one_editor_and_restore_annotations(self):
+        import tempfile
+
         host = main.ProSnipApp()
         self.addCleanup(_release_host, host)
-        image = Image.new("RGB", (30, 20), "blue")
-        host._capture_pending = True
-        host._on_capture_done(image)
-        host._capture_pending = True
-        host._on_capture_done(image)
-        self.assertEqual(len(host._editors), 2)
-        self.assertIsNot(host._editors[0], host._editors[1])
-        self.assertTrue(host._editors[0].isVisible())
-        self.assertTrue(host._editors[1].isVisible())
+        previous = os.environ.get("LOCALAPPDATA")
+        errors = []
+        previous_hook = sys.excepthook
 
-        first = host._editors[0]
-        first.close()
-        QTest.qWait(50)
-        self.assertEqual(len(host._editors), 1)
-        self.assertIsNot(host._editors[0], first)
+        def _hook(exc_type, exc, tb):
+            errors.append(exc)
+            previous_hook(exc_type, exc, tb)
+
+        class _Errors(logging.Handler):
+            def __init__(self):
+                super().__init__(level=logging.ERROR)
+                self.records = []
+
+            def emit(self, record):
+                self.records.append(record)
+
+        handler = _Errors()
+        logging.getLogger("prosnip").addHandler(handler)
+        sys.excepthook = _hook
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                os.environ["LOCALAPPDATA"] = tmp
+                red, green, blue = (
+                    Image.new("RGB", (48, 32), "red"),
+                    Image.new("RGB", (48, 32), "green"),
+                    Image.new("RGB", (48, 32), "blue"),
+                )
+                host._capture_pending = True
+                host._on_capture_done(Image.new("RGB", (48, 32), "white"))
+                window = host._editors[0]
+                before = window._tray.card_count()
+                host._capture_pending = True
+                host._on_capture_done(red)
+                first_path = window._active_path
+                mark = items.RectItem(
+                    QRectF(4, 4, 12, 12), QColor("#ff0000"), QColor("#ff0000"), 2,
+                )
+                window._scene.addItem(mark)
+                window._scene._push_undo(mark)
+                host._capture_pending = True
+                host._on_capture_done(green)
+                host._capture_pending = True
+                host._on_capture_done(blue)
+                QApplication.processEvents()
+                windows = [
+                    widget
+                    for widget in QApplication.topLevelWidgets()
+                    if isinstance(widget, editor.EditorWindow) and widget.isVisible()
+                ]
+                self.assertEqual(windows, [window])
+                self.assertEqual(len(host._editors), 1)
+                self.assertEqual(window._tray.card_count(), before + 3)
+                self.assertEqual(window._pil_image.getpixel((1, 1)), (0, 0, 255))
+                newest = window._tray._row.itemAt(0).widget()
+                self.assertTrue(newest.property("selected"))
+                self.assertEqual(newest.property("imagePath"), window._active_path)
+                self.assertFalse(any(item is mark for item in window._scene.items()))
+                third = window._active_path
+                window._open_recent(first_path)
+                self.assertEqual(window._pil_image.getpixel((1, 1)), (255, 0, 0))
+                self.assertTrue(any(item is mark and item.scene() is window._scene for item in window._scene.items()))
+                self.assertTrue(window._scene._undo_stack)
+                window._open_recent(third)
+                self.assertEqual(window._pil_image.getpixel((1, 1)), (0, 0, 255))
+                self.assertFalse(any(item is mark for item in window._scene.items()))
+                self.assertEqual(errors, [])
+                self.assertEqual(handler.records, [])
+        finally:
+            sys.excepthook = previous_hook
+            logging.getLogger("prosnip").removeHandler(handler)
+            if previous is None:
+                os.environ.pop("LOCALAPPDATA", None)
+            else:
+                os.environ["LOCALAPPDATA"] = previous
 
     def test_log_path_falls_back_when_the_first_directory_is_not_writable(self):
         import tempfile

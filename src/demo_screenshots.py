@@ -93,6 +93,7 @@ def capture_demo_screenshots(folder: Path) -> int:
         saved.append(_recent_tray(folder / "37-recents-tray.png"))
         saved.append(_canvas_demo(folder / "38-canvas-demo.png"))
         saved.append(_new_tools(folder / "42-new-tools.png"))
+        saved.append(_three_captures(folder / "43-three-captures.png"))
         _assert_sizes()
         editor.close()
     except Exception:
@@ -547,6 +548,30 @@ def _new_tools(path: Path) -> Path:
         return _grab(window, path)
     finally:
         window.close()
+
+
+def _three_captures(path: Path) -> Path:
+    """Three snips in the one editor. The newest tray card is selected."""
+    import os
+    import tempfile
+
+    from editor import EditorWindow
+
+    previous = os.environ.get("LOCALAPPDATA")
+    os.environ["LOCALAPPDATA"] = tempfile.mkdtemp()
+    window = EditorWindow(Image.new("RGB", (960, 540), "#e00000"))
+    try:
+        window.receive_capture(Image.new("RGB", (960, 540), "#2f9e44"), "Green")
+        window.receive_capture(Image.new("RGB", (960, 540), "#3949ab"), "Blue")
+        _present(window, 1024, 680)
+        window.assert_compact_layout()
+        return _grab(window, path)
+    finally:
+        window.close()
+        if previous is None:
+            os.environ.pop("LOCALAPPDATA", None)
+        else:
+            os.environ["LOCALAPPDATA"] = previous
 
 
 def _canvas_demo(path: Path) -> Path:

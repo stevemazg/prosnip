@@ -341,6 +341,10 @@ class ProSnipApp:
             log.info("Main window hidden for capture")
         if self._tray is not None:
             self._tray.hide()
+        for editor in self._living_editors():
+            if editor.isVisible() and editor not in self._hidden_editors:
+                editor.hide()
+                self._hidden_editors.append(editor)
 
     def _restore_after_capture(self):
         if self._tray is not None and not self._tray.isVisible():
@@ -349,6 +353,12 @@ class ProSnipApp:
         self._restore_main_after_capture = False
         if should_restore:
             self._show_main_window()
+        for editor in list(self._hidden_editors):
+            try:
+                editor.show()
+            except RuntimeError:
+                continue
+        self._hidden_editors = []
 
     def _show_colour_picker(self, editor=None):
         if self._capture_in_progress():
@@ -416,14 +426,6 @@ class ProSnipApp:
 
     def _finish_picker_ui(self):
         self._restore_after_capture()
-        for editor in list(self._hidden_editors):
-            try:
-                if editor.isVisible() is False:
-                    editor.show()
-                    editor.raise_()
-            except RuntimeError:
-                continue
-        self._hidden_editors = []
 
     def _do_capture(self):
         if self._session is not None and self._session.is_active:
@@ -479,7 +481,25 @@ class ProSnipApp:
         if box.clickedButton() is close:
             peer.close()
 
+    def _living_editors(self):
+        from PyQt6 import sip
+
+        living = []
+        for editor in self._editors:
+            try:
+                if sip.isdeleted(editor):
+                    continue
+            except RuntimeError:
+                continue
+            living.append(editor)
+        self._editors = living
+        return living
+
     def _open_editor(self, pil_image):
+        editor = self._living_editors()[0] if self._living_editors() else None
+        if editor is not None:
+            editor.receive_capture(pil_image)
+            return
         editor = EditorWindow(pil_image)
         editor.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
         self._editors.append(editor)
