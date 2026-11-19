@@ -89,8 +89,10 @@ def capture_demo_screenshots(folder: Path) -> int:
         saved.append(_sidebar_tool(folder / "36-sidebar-callout.png", "callout"))
         saved.append(_sidebar_tool(folder / "39-sidebar-shape.png", "rect"))
         saved.append(_sidebar_tool(folder / "40-sidebar-step.png", "number"))
+        saved.append(_sidebar_tool(folder / "41-sidebar-pen.png", "pen"))
         saved.append(_recent_tray(folder / "37-recents-tray.png"))
         saved.append(_canvas_demo(folder / "38-canvas-demo.png"))
+        saved.append(_new_tools(folder / "42-new-tools.png"))
         _assert_sizes()
         editor.close()
     except Exception:
@@ -509,6 +511,39 @@ def _recent_tray(path: Path) -> Path:
     for name, colour in (("one", "#d7e6f5"), ("two", "#fff7e8"), ("three", "#e8f5e9")):
         window._tray.remember(PILImage.new("RGB", (320, 180), colour), name)
     try:
+        return _grab(window, path)
+    finally:
+        window.close()
+
+
+def _new_tools(path: Path) -> Path:
+    from items import ArrowItem, PolygonItem, RectItem, SpotlightItem, apply_shadow
+
+    window = _editor_window()
+    _present(window, 1024, 680)
+    scene = window._scene
+    rounded = RectItem(QRectF(70, 90, 150, 80), QColor("#e00000"), QColor(224, 0, 0, 70), 3)
+    rounded.corner_radius = 18
+    rounded.shadow_enabled = True
+    rounded.shadow_offset = 5
+    rounded.shadow_blur = 10
+    apply_shadow(rounded)
+    scene.addItem(rounded)
+    curved = ArrowItem(QPointF(260, 200), QPointF(470, 110), QColor("#3949ab"), 4, "curved")
+    curved.start_cap = "square"
+    curved.end_cap = "dot"
+    scene.addItem(curved)
+    polygon = PolygonItem(
+        [QPointF(0, 40), QPointF(50, 0), QPointF(110, 24), QPointF(90, 70), QPointF(20, 70)],
+        QColor("#2f9e44"), QColor(47, 158, 68, 80), 2,
+    )
+    polygon.setPos(QPointF(520, 300))
+    scene.addItem(polygon)
+    scene.addItem(SpotlightItem(QRectF(300, 280, 160, 110), 150))
+    curved.setSelected(True)
+    window._on_tool_changed("arrow")
+    try:
+        window.assert_compact_layout()
         return _grab(window, path)
     finally:
         window.close()

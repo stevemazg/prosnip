@@ -2,8 +2,9 @@ import math
 from enum import IntEnum
 
 from PyQt6.QtWidgets import (
-    QGraphicsItem, QGraphicsRectItem, QGraphicsEllipseItem,
-    QGraphicsTextItem, QGraphicsPixmapItem, QGraphicsSceneMouseEvent
+    QGraphicsDropShadowEffect, QGraphicsItem, QGraphicsRectItem,
+    QGraphicsEllipseItem, QGraphicsTextItem, QGraphicsPixmapItem,
+    QGraphicsSceneMouseEvent,
 )
 from PyQt6.QtGui import (
     QPainter, QPen, QBrush, QColor, QFont, QPainterPath,
@@ -28,6 +29,23 @@ class HandlePos(IntEnum):
 
 HANDLE_SIZE = 8
 HANDLE_HALF = HANDLE_SIZE / 2
+END_CAPS = ("none", "arrow", "dot", "square")
+
+
+def apply_shadow(item) -> None:
+    """Per-annotation drop shadow. Off leaves the item with no effect."""
+    enabled = bool(getattr(item, "shadow_enabled", False))
+    if not enabled:
+        if item.graphicsEffect() is not None:
+            item.setGraphicsEffect(None)
+        return
+    effect = QGraphicsDropShadowEffect()
+    offset = max(0, int(getattr(item, "shadow_offset", 4)))
+    blur = max(0, int(getattr(item, "shadow_blur", 8)))
+    effect.setOffset(offset, offset)
+    effect.setBlurRadius(blur)
+    effect.setColor(QColor(0, 0, 0, 150))
+    item.setGraphicsEffect(effect)
 
 
 def item_is_text_editing(item) -> bool:
@@ -332,6 +350,8 @@ class ArrowItem(QGraphicsItem):
         self.pen_color = QColor(pen_color)
         self.line_width = max(1, int(line_width))
         self.style = style if style in ARROW_STYLES else "plain"
+        self.start_cap = "none"
+        self.end_cap = "arrow"
         self.stroke_enabled = True
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, True)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
@@ -442,18 +462,39 @@ class ArrowItem(QGraphicsItem):
             pen.setStyle(Qt.PenStyle.DotLine)
         painter.setPen(pen)
         painter.setBrush(QBrush(Qt.BrushStyle.NoBrush))
+        start_cap = self.start_cap if self.start_cap in END_CAPS else "none"
+        end_cap = self.end_cap if self.end_cap in END_CAPS else "arrow"
+        if self.style == "double" and start_cap == "none":
+            start_cap = "arrow"
         if self.style == "curved":
             path = QPainterPath()
             path.moveTo(self.start)
-            path.quadTo(self._curve_control(), self.end)
-            painter.drawPath(path)
             control = self._curve_control()
-            self._draw_head(painter, control, self.end)
+            path.quadTo(control, self.end)
+            painter.drawPath(path)
+            self._draw_cap(painter, control, self.end, end_cap)
+            self._draw_cap(painter, control, self.start, start_cap)
         else:
             painter.drawLine(self.start, self.end)
-            self._draw_head(painter, self.start, self.end)
-            if self.style == "double":
-                self._draw_head(painter, self.end, self.start)
+            self._draw_cap(painter, self.start, self.end, end_cap)
+            self._draw_cap(painter, self.end, self.start, start_cap)
+
+    def _draw_cap(self, painter: QPainter, origin: QPointF, tip: QPointF, kind: str):
+        if kind == "arrow":
+            self._draw_head(painter, origin, tip)
+            return
+        if kind not in {"dot", "square"}:
+            return
+        ux, uy, length = self._direction(origin, tip)
+        if length < 1:
+            return
+        size = max(4.0, self.line_width * 1.6)
+        painter.setPen(QPen(Qt.PenStyle.NoPen))
+        painter.setBrush(QBrush(self.pen_color))
+        if kind == "dot":
+            painter.drawEllipse(QRectF(tip.x() - size, tip.y() - size, size * 2, size * 2))
+            return
+        painter.drawRect(QRectF(tip.x() - size, tip.y() - size, size * 2, size * 2))
 
     def _start_resize(self, pos_index: int, scene_pos: QPointF):
         self._resizing = True
@@ -930,3 +971,72 @@ class NumberItem(QGraphicsItem):
         font = QFont("Arial", 12 if self.number >= 10 else 14, QFont.Weight.Bold)
         painter.setFont(font)
         painter.drawText(QRectF(0, 0, 36, 36), int(Qt.AlignmentFlag.AlignCenter), str(self.number))
+
+
+class PolygonItem(QGraphicsItem):
+    """A closed polygon. Points are local to the item."""
+
+    def __init__(self, points, pen_color: QColor, fill_color: QColor, line_width: int):
+        super().__init__()
+        self.points = [QPointF(point) for point in points]
+        self.pen_color = QColor(pen_color)
+        self.fill_color = QColor(fill_color)
+        self.line_width = max(1, int(line_width))
+        self.stroke_enabled = True
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, True)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges, True)
+
+    def _path(self) -> QPainterPath:
+        path = QPainterPath()
+        if not self.points:
+            return path
+        path.moveTo(self.points[0])
+        for point in self.points[1:]:
+            path.lineTo(point)
+        path.closeSubpath()
+        return path
+
+    def boundingRect(self) -> QRectF:
+        extra = self.line_width / 2.0 + 8.0
+        return self._path().boundingRect().adjusted(-extra, -extra, extra, extra)
+
+    def shape(self) -> QPainterPath:
+        stroker = QPainterPathStroker()
+        stroker.setWidth(self.line_width + 8)
+        return stroker.createStroke(self._path())
+
+    def paint(self, painter: QPainter, option, widget=None):
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        pen = QPen(self.pen_color, self.line_width) if self.stroke_enabled else QPen(Qt.PenStyle.NoPen)
+        painter.setPen(pen)
+        painter.setBrush(QBrush(self.fill_color))
+        painter.drawPath(self._path())
+
+
+class SpotlightItem(RectItem):
+    """Darken everything outside the selected rectangle."""
+
+    def __init__(self, rect: QRectF, darkness: int = 140):
+        super().__init__(rect, QColor("#ffffff"), QColor(0, 0, 0, 0), 2)
+        self.darkness = max(0, min(220, int(darkness)))
+
+    def boundingRect(self) -> QRectF:
+        return self.rect().adjusted(-4000, -4000, 4000, 4000)
+
+    def shape(self) -> QPainterPath:
+        path = QPainterPath()
+        path.addRect(self.rect().adjusted(-6, -6, 6, 6))
+        return path
+
+    def paint(self, painter: QPainter, option, widget=None):
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        outer = self.boundingRect()
+        cover = QPainterPath()
+        cover.addRect(outer)
+        hole = QPainterPath()
+        hole.addRect(self.rect())
+        painter.fillPath(cover.subtracted(hole), QColor(0, 0, 0, self.darkness))
+        painter.setPen(QPen(QColor(255, 255, 255, 200), 1.5))
+        painter.setBrush(QBrush(Qt.BrushStyle.NoBrush))
+        painter.drawRect(self.rect())

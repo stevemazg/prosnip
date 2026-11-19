@@ -99,6 +99,21 @@ def _draw(painter: QPainter, kind: str, size: int) -> None:
             painter.drawEllipse(QRectF(s * x, s * (0.28 + (i % 2) * 0.12), s * 0.16, s * 0.16))
     elif kind == "ellipse":
         painter.drawEllipse(QRectF(s * 0.16, s * 0.24, s * 0.68, s * 0.50))
+    elif kind == "polygon":
+        painter.drawLine(QPointF(s * 0.50, s * 0.16), QPointF(s * 0.84, s * 0.40))
+        painter.drawLine(QPointF(s * 0.84, s * 0.40), QPointF(s * 0.70, s * 0.82))
+        painter.drawLine(QPointF(s * 0.70, s * 0.82), QPointF(s * 0.30, s * 0.82))
+        painter.drawLine(QPointF(s * 0.30, s * 0.82), QPointF(s * 0.16, s * 0.40))
+        painter.drawLine(QPointF(s * 0.16, s * 0.40), QPointF(s * 0.50, s * 0.16))
+    elif kind == "spotlight":
+        painter.drawEllipse(QRectF(s * 0.28, s * 0.28, s * 0.44, s * 0.44))
+        painter.drawLine(QPointF(s * 0.18, s * 0.18), QPointF(s * 0.30, s * 0.30))
+        painter.drawLine(QPointF(s * 0.82, s * 0.18), QPointF(s * 0.70, s * 0.30))
+        painter.drawLine(QPointF(s * 0.18, s * 0.82), QPointF(s * 0.30, s * 0.70))
+        painter.drawLine(QPointF(s * 0.82, s * 0.82), QPointF(s * 0.70, s * 0.70))
+    elif kind == "cutout":
+        painter.drawRect(QRectF(s * 0.16, s * 0.20, s * 0.68, s * 0.60))
+        painter.drawLine(QPointF(s * 0.16, s * 0.50), QPointF(s * 0.84, s * 0.50))
     elif kind == "image":
         painter.drawRect(QRectF(s * 0.16, s * 0.22, s * 0.68, s * 0.54))
         painter.drawLine(QPointF(s * 0.16, s * 0.60), QPointF(s * 0.40, s * 0.42))

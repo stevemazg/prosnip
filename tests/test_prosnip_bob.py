@@ -349,7 +349,7 @@ class LauncherTests(unittest.TestCase):
         labels = [label.text() for label in window.findChildren(main_window.QLabel)]
         self.assertIn("ProSnip-Bob", labels)
         self.assertIn(f"Version {editor.APP_VERSION}", labels)
-        self.assertEqual(editor.APP_VERSION, "1.8.0.1")
+        self.assertEqual(editor.APP_VERSION, "1.8.1.0")
         self.assertEqual(window.new_capture_button.text(), "New Capture")
         self.assertEqual(window.quit_button.text(), "Quit")
         self.assertIn("this system", window.shortcut_label.text())
@@ -631,8 +631,8 @@ class AppTests(unittest.TestCase):
             "Steve Maz",
             "ProSnip-Bob",
             "ProSnip-Bob screen capture and annotation tool",
-            "1.8.0.1",
-            "(1, 8, 0, 1)",
+            "1.8.1.0",
+            "(1, 8, 1, 0)",
             "ProSnip-Bob.exe",
             "Copyright (C) 2026 Steve Maz",
         ):
@@ -1192,6 +1192,154 @@ class ColourFormatTests(unittest.TestCase):
         self.assertGreaterEqual(picker.width(), 28)
         self.assertEqual(picker.toolTip(), "Colour picker (I)")
         self.assertIn("QToolTip", bar.styleSheet())
+
+
+class Phase181Tests(unittest.TestCase):
+    def _plate(self, scene, width=200, height=120, colour="#d7e6f5"):
+        from PyQt6.QtWidgets import QGraphicsPixmapItem
+
+        pixmap = QPixmap(width, height)
+        pixmap.fill(QColor(colour))
+        plate = QGraphicsPixmapItem(pixmap)
+        plate.setZValue(-100)
+        scene.addItem(plate)
+        scene.setSceneRect(0, 0, width, height)
+        return plate
+
+    def test_presets_follow_the_active_tool_and_line_up(self):
+        from sidebar import PreviewTile
+
+        window = editor.EditorWindow(Image.new("RGB", (640, 360), "#d7e6f5"))
+        self.addCleanup(window.close)
+        window._on_tool_changed("pen")
+        QApplication.processEvents()
+        pens = window._sidebar.findChildren(PreviewTile)
+        self.assertGreaterEqual(len(pens), 8)
+        size = pens[0].size()
+        host = window._sidebar._grid_host
+        for tile in pens:
+            self.assertEqual(tile.size(), size)
+            self.assertEqual(tile._tool, "pen")
+            pos = tile.mapTo(host, tile.rect().topLeft())
+            self.assertGreaterEqual(pos.x(), 0)
+            self.assertGreaterEqual(pos.y(), 0)
+        window._on_tool_changed("arrow")
+        QApplication.processEvents()
+        arrows = [tile for tile in window._sidebar.findChildren(PreviewTile) if tile._tool == "arrow"]
+        self.assertGreaterEqual(len(arrows), 8)
+        self.assertTrue(all(tile._tool == "arrow" for tile in arrows))
+        white = next(tile for tile in arrows if tile._name == "White")
+        image = white.grab().toImage()
+        colours = {
+            image.pixelColor(x, y).name()
+            for x in range(0, image.width(), 4)
+            for y in range(0, image.height(), 4)
+        }
+        self.assertGreater(len(colours), 2)
+        self.assertIn("menu-indicator", window._bar.styleSheet())
+        self.assertIn("Create", window._bar.findChild(QWidget, "CreateButton").text())
+
+    def test_recent_tray_fits_the_caption_without_a_vertical_bar(self):
+        window = editor.EditorWindow(Image.new("RGB", (320, 180), "#d7e6f5"))
+        self.addCleanup(window.close)
+        window._tray.remember(Image.new("RGB", (80, 48), "#fff7e8"), "capture-120000")
+        scroll = window._tray._scroll
+        self.assertEqual(scroll.verticalScrollBarPolicy(), Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.assertLessEqual(window._tray.height(), 130)
+        card = window._tray.findChild(QWidget, "RecentCard")
+        caption = card.findChild(QWidget, "RecentCaption")
+        self.assertIsNotNone(caption)
+        self.assertLessEqual(caption.height(), card.height())
+        bottom = card.mapTo(window._tray, card.rect().bottomLeft()).y()
+        self.assertLess(bottom, window._tray.height())
+
+    def test_shadow_curve_ends_and_rounded_rect(self):
+        arrow = items.ArrowItem(QPointF(10, 40), QPointF(120, 20), QColor("#e00000"), 4, "curved")
+        arrow.start_cap = "square"
+        arrow.end_cap = "dot"
+        arrow.shadow_enabled = True
+        items.apply_shadow(arrow)
+        self.assertIsNotNone(arrow.graphicsEffect())
+        rect = items.RectItem(QRectF(0, 0, 80, 40), QColor("#3949ab"), QColor(57, 73, 171, 40), 2)
+        rect.corner_radius = 14
+        scene = canvas.ProSnipScene()
+        scene.addItem(arrow)
+        scene.addItem(rect)
+        scene.setSceneRect(0, 0, 180, 80)
+        image = QImage(180, 80, QImage.Format.Format_ARGB32)
+        image.fill(Qt.GlobalColor.white)
+        painter = QPainter(image)
+        scene.render(painter)
+        painter.end()
+        self.assertGreater(image.pixelColor(20, 30).alpha(), 0)
+        items.apply_shadow(arrow)
+        arrow.shadow_enabled = False
+        items.apply_shadow(arrow)
+        self.assertIsNone(arrow.graphicsEffect())
+
+    def test_polygon_spotlight_eraser_cut_group_flatten_and_duplicate(self):
+        scene = canvas.ProSnipScene()
+        plate = self._plate(scene, 200, 100, "#4488cc")
+        scene.set_pen_color(QColor("#e00000"))
+        scene.set_fill_color(QColor(224, 0, 0, 80))
+        scene.set_tool("polygon")
+        scene._poly_points = [QPointF(10, 10), QPointF(40, 12), QPointF(24, 36)]
+        polygon = scene.finish_polygon()
+        self.assertIsInstance(polygon, items.PolygonItem)
+        self.assertEqual(len(polygon.points), 3)
+
+        spot = items.SpotlightItem(QRectF(120, 20, 40, 30), 160)
+        scene.addItem(spot)
+        self.assertGreater(spot.darkness, 100)
+        self.assertLess(spot.shape().boundingRect().width(), 80)
+
+        kept = items.RectItem(QRectF(150, 60, 20, 20), QColor("#111111"), QColor(0, 0, 0, 0), 2)
+        scene.addItem(kept)
+        stroke = items.StrokeItem(QColor("#ffffff"), 18)
+        stroke.add_point(QPointF(20, 20))
+        stroke.add_point(QPointF(30, 20))
+        scene.addItem(stroke)
+        scene.erase_to_canvas(stroke)
+        self.assertNotIn(stroke, scene.items())
+        cleared = plate.pixmap().toImage().pixelColor(24, 20)
+        self.assertLess(cleared.alpha(), 20)
+
+        mover = items.RectItem(QRectF(0, 0, 10, 10), QColor("#111111"), QColor(0, 0, 0, 0), 1)
+        mover.setPos(10, 80)
+        scene.addItem(mover)
+        self.assertTrue(scene.cut_strip(QRectF(0, 40, 200, 16)))
+        self.assertLess(plate.pixmap().height(), 100)
+        self.assertLess(mover.pos().y(), 80)
+
+        scene.undo()
+        self.assertEqual(plate.pixmap().height(), 100)
+
+        left = items.RectItem(QRectF(0, 0, 16, 16), QColor("#111111"), QColor(0, 0, 0, 0), 1)
+        right = items.RectItem(QRectF(30, 0, 16, 16), QColor("#111111"), QColor(0, 0, 0, 0), 1)
+        scene.addItem(left)
+        scene.addItem(right)
+        left.setSelected(True)
+        right.setSelected(True)
+        group = scene.group_selected()
+        self.assertIsNotNone(group)
+        self.assertIs(left.parentItem(), group)
+        scene.ungroup_selected()
+        self.assertIsNone(left.parentItem())
+
+        mark = items.RectItem(QRectF(4, 4, 20, 20), QColor("#ff0000"), QColor("#ff0000"), 1)
+        scene.addItem(mark)
+        mark.setSelected(True)
+        self.assertTrue(scene.flatten_selected())
+        self.assertNotIn(mark, scene.items())
+        flat = plate.pixmap().toImage().pixelColor(10, 10)
+        self.assertGreater(flat.red(), 180)
+        scene.undo()
+        self.assertIn(mark, scene.items())
+
+        copy = scene.duplicate_at(mark.sceneBoundingRect().center())
+        self.assertIsNotNone(copy)
+        self.assertIsNot(copy, mark)
+        self.assertTrue(copy.isSelected())
 
 
 if __name__ == "__main__":

@@ -18,8 +18,11 @@ from PyQt6.QtWidgets import (
 from icons import tool_icon
 
 DEFAULT_ORDER = ["favourites", "arrow", "text", "callout", "rect", "stamp", "fill", "select"]
-MORE_LIVE = ["crop", "pen", "highlight", "number", "eraser", "blur", "ellipse", "image", "screenpick", "pick"]
-MORE_LATER = ["selection", "cutout", "magnify", "spotlight"]
+MORE_LIVE = [
+    "crop", "pen", "highlight", "number", "eraser", "blur", "ellipse", "image",
+    "polygon", "spotlight", "cutout", "screenpick", "pick",
+]
+MORE_LATER = ["selection", "magnify"]
 LABELS = {
     "favourites": "Favourites",
     "arrow": "Arrow",
@@ -36,6 +39,7 @@ LABELS = {
     "eraser": "Eraser",
     "blur": "Blur",
     "ellipse": "Ellipse",
+    "polygon": "Polygon",
     "image": "Image",
     "screenpick": "Screen colour",
     "pick": "Pick colour",
@@ -116,6 +120,7 @@ class EditorBar(QWidget):
         self.setStyleSheet(
             "QToolButton { border: none; background: transparent; padding: 2px 4px; }"
             "QToolButton:checked { background: palette(mid); border-radius: 6px; }"
+            "QToolButton::menu-indicator { image: none; width: 0px; height: 0px; }"
         )
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.customContextMenuRequested.connect(self._context_menu)
@@ -132,10 +137,17 @@ class EditorBar(QWidget):
         ):
             row.addWidget(self._nav(name, slot, kind))
         create = self._nav("Create", None, "create")
+        create.setObjectName("CreateButton")
+        create.setToolTip("Create")
+        if self._labels:
+            create._full_text = "Create ▾"
+            create.setText("Create ▾")
+            create._apply_size(True)
         menu = QMenu(create)
         menu.addAction("New image", lambda: self.save_requested.emit("new-image"))
         menu.addAction("New from clipboard", lambda: self.save_requested.emit("new-clipboard"))
         create.setMenu(menu)
+        create.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         row.addWidget(create)
         row.addStretch(1)
         self._tool_host = QWidget()
@@ -145,6 +157,7 @@ class EditorBar(QWidget):
         row.addWidget(self._tool_host, 0)
         self._more = self._nav("More", None, "more")
         self._more.setObjectName("MoreButton")
+        self._more.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         self._tool_row.addWidget(self._more)
         row.addStretch(1)
         copy = self._nav("Copy All", self.copy_all_requested.emit, "select")
@@ -218,7 +231,7 @@ class EditorBar(QWidget):
             self._more_menu.addAction(LABELS.get(tool_id, tool_id), lambda t=tool_id: self._choose(t))
         self._more_menu.addSeparator()
         for tool_id in MORE_LATER:
-            action = self._more_menu.addAction(f"{LABELS[tool_id]} (1.8.1)")
+            action = self._more_menu.addAction(f"{LABELS[tool_id]} (later)")
             action.setEnabled(False)
         self._more_menu.addSeparator()
         self._more_menu.addAction("Customise toolbar…", self.customise)

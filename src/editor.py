@@ -30,7 +30,7 @@ from pathlib import Path
 from PIL import Image, ImageOps
 
 APP_NAME = "ProSnip-Bob"
-APP_VERSION = "1.8.0.1"
+APP_VERSION = "1.8.1.0"
 
 
 def clamp_crop_rect(rect: QRectF, width: int, height: int) -> QRect | None:
@@ -360,6 +360,8 @@ class EditorWindow(QMainWindow):
             "text": ("TextItem",),
             "callout": ("CalloutItem",),
             "rect": ("RectItem", "EllipseItem"),
+            "polygon": ("PolygonItem",),
+            "spotlight": ("SpotlightItem",),
             "number": ("NumberItem",),
         }.get(self._scene._tool, ())
         self._scene.clearSelection()
@@ -375,6 +377,12 @@ class EditorWindow(QMainWindow):
         self._view.setStyleSheet(f"background-color: {colours['workspace']}; border: none;")
         from PyQt6.QtGui import QBrush
         self._view.setBackgroundBrush(QBrush(QColor(colours["workspace"])))
+        if getattr(self, "_splitter", None) is not None:
+            self._splitter.setHandleWidth(1)
+            self._splitter.setChildrenCollapsible(False)
+            self._splitter.setStyleSheet(
+                f"QSplitter#EditorSplit::handle {{ background: {colours['border']}; border: none; }}"
+            )
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -421,6 +429,7 @@ class EditorWindow(QMainWindow):
         image = bar.addMenu("Image")
         image.addAction("Resize…", self._resize_image)
         image.addAction("Crop", lambda: self._select_tool("crop"))
+        image.addAction("Cut out", lambda: self._select_tool("cutout"))
         image.addAction("Rotate 90°", self._rotate_image)
         image.addAction("Flip horizontally", self._flip_image)
         image.addAction("Border", self._add_border)
@@ -430,6 +439,10 @@ class EditorWindow(QMainWindow):
         arrange.addAction("Send backward", self._scene.send_back)
         arrange.addAction("Bring to front", self._scene.bring_to_front)
         arrange.addAction("Send to back", self._scene.send_to_back)
+        arrange.addSeparator()
+        arrange.addAction("Group", self._scene.group_selected)
+        arrange.addAction("Ungroup", self._scene.ungroup_selected)
+        arrange.addAction("Flatten", self._scene.flatten_selected)
         arrange.addAction("Lock item", self._scene.toggle_lock)
         arrange.addAction("Renumber steps", self._scene.renumber_steps)
         self._arrange_menu = arrange
@@ -642,6 +655,7 @@ class EditorWindow(QMainWindow):
         self._toolbar.screen_pick_requested.connect(self.screen_pick_requested.emit)
         self._options.screen_pick_requested.connect(self.screen_pick_requested.emit)
         self._scene.selectionChanged.connect(self._refresh_status_tool)
+        self._scene.image_changed.connect(self._on_image_changed)
 
     def _setup_shortcuts(self):
         QShortcut(QKeySequence("Ctrl+S"), self).activated.connect(self._save_png)
@@ -731,6 +745,9 @@ class EditorWindow(QMainWindow):
             "text": "Text",
             "crop": "Crop",
             "eraser": "Eraser",
+            "polygon": "Polygon",
+            "spotlight": "Spotlight",
+            "cutout": "Cut out",
             "screenpick": "Colour picker",
         }
         self._status_tool.setText(names.get(self._scene._tool, self._scene._tool))
@@ -853,3 +870,16 @@ class EditorWindow(QMainWindow):
                 continue
             item.moveBy(-float(crop.left()), -float(crop.top()))
         self._pil_image = _crop_pil(self._pil_image, crop)
+
+    def _on_image_changed(self):
+        from capture import qpixmap_to_pil
+
+        if self._bg_item is None:
+            return
+        pixmap = self._bg_item.pixmap()
+        try:
+            self._pil_image = qpixmap_to_pil(pixmap)
+        except ValueError:
+            return
+        if getattr(self, "_footer_size", None) is not None:
+            self._footer_size.setText(f"{pixmap.width()} × {pixmap.height()} px")

@@ -1,18 +1,18 @@
 from PyQt6.QtWidgets import (
     QGraphicsScene, QGraphicsView, QGraphicsPixmapItem,
-    QGraphicsRectItem, QFileDialog, QWidget
+    QGraphicsRectItem, QGraphicsItem, QGraphicsItemGroup, QFileDialog, QWidget
 )
 from PyQt6.QtGui import (
     QPainter, QPen, QBrush, QColor, QPixmap, QImage,
-    QKeyEvent, QTransform
+    QKeyEvent, QPainterPath, QTransform
 )
 from PyQt6.QtCore import Qt, QRectF, QPointF, QEvent, pyqtSignal
 
 from items import (
     ArrowItem, TextItem, CalloutItem, StampItem,
     RectItem, EllipseItem, ImageOverlayItem, StrokeItem,
-    BlurItem, NumberItem,
-    item_is_text_editing,
+    BlurItem, NumberItem, PolygonItem, SpotlightItem,
+    apply_shadow, item_is_text_editing,
 )
 from stamp_picker import StampPickerDialog
 from styles import DEFAULT_STYLE
@@ -25,6 +25,7 @@ class ProSnipScene(QGraphicsScene):
     numbers_changed = pyqtSignal(int)
     number_edit_requested = pyqtSignal(object)
     style_changed = pyqtSignal()
+    image_changed = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -44,15 +45,32 @@ class ProSnipScene(QGraphicsScene):
         self._line_width = DEFAULT_STYLE.line_width
         self._font_size = DEFAULT_STYLE.font_size
         self.arrow_style = "plain"
+        self.arrow_start = "none"
+        self.arrow_end = "arrow"
         self.item_opacity = 1.0
         self.corner_radius = 0
+        self.shadow_enabled = False
+        self.shadow_offset = 4
+        self.shadow_blur = 8
+        self.spotlight_darkness = 140
         self._image_rect_item = None
         self._next_number = 1
         self._clipboard = []
         self._eraser_item = None
+        self._poly_points: list[QPointF] = []
+        self._poly_preview = None
+        self._cut_rect = None
 
     def set_tool(self, tool: str):
+        if tool != "polygon":
+            self._cancel_polygon()
         self._tool = tool
+
+    def background_item(self):
+        for item in self.items():
+            if isinstance(item, QGraphicsPixmapItem) and item.zValue() < 0 and item.parentItem() is None:
+                return item
+        return None
 
     def set_pen_color(self, color: QColor):
         self._pen_color = QColor(color)
@@ -83,6 +101,11 @@ class ProSnipScene(QGraphicsScene):
 
     def _place(self, item):
         item.setOpacity(self.item_opacity)
+        if self.shadow_enabled and not isinstance(item, SpotlightItem):
+            item.shadow_enabled = True
+            item.shadow_offset = self.shadow_offset
+            item.shadow_blur = self.shadow_blur
+            apply_shadow(item)
         self.addItem(item)
         return item
 
@@ -312,6 +335,8 @@ class ProSnipScene(QGraphicsScene):
             item = self._place(ArrowItem(
                 pos, pos, self._pen_color, max(6, self._line_width), self.arrow_style,
             ))
+            item.start_cap = self.arrow_start
+            item.end_cap = self.arrow_end
             self._current_item = item
             event.accept()
 
@@ -371,10 +396,26 @@ class ProSnipScene(QGraphicsScene):
             event.accept()
 
         elif tool == "rect":
-            item = RectItem(QRectF(pos, pos), self._pen_color, self._fill_color, self._line_width)
+            item = self._place(RectItem(QRectF(pos, pos), self._pen_color, self._fill_color, self._line_width))
             item.corner_radius = self.corner_radius
-            self.addItem(item)
             self._current_item = item
+            event.accept()
+
+        elif tool == "polygon":
+            self._poly_points.append(QPointF(pos))
+            self._update_poly_preview(pos)
+            event.accept()
+
+        elif tool == "spotlight":
+            item = self._place(SpotlightItem(QRectF(pos, pos), self.spotlight_darkness))
+            self._current_item = item
+            event.accept()
+
+        elif tool == "cutout":
+            self._cut_rect = QGraphicsRectItem(QRectF(pos, pos))
+            self._cut_rect.setPen(QPen(QColor("#ffffff"), 2, Qt.PenStyle.DashLine))
+            self._cut_rect.setBrush(QBrush(QColor(0, 0, 0, 40)))
+            self.addItem(self._cut_rect)
             event.accept()
 
         elif tool == "blur":
@@ -442,7 +483,7 @@ class ProSnipScene(QGraphicsScene):
                 item._update_handles()
                 item.update()
 
-            elif tool in ("rect", "ellipse", "blur"):
+            elif tool in ("rect", "ellipse", "blur", "spotlight"):
                 item = self._current_item
                 r = QRectF(self._press_pos, pos).normalized()
                 item.prepareGeometryChange()
@@ -477,6 +518,12 @@ class ProSnipScene(QGraphicsScene):
         elif tool == "image" and self._image_rect_item is not None:
             self._image_rect_item.setRect(QRectF(self._press_pos, pos).normalized())
 
+        elif tool == "polygon" and self._poly_points:
+            self._update_poly_preview(pos)
+
+        elif tool == "cutout" and self._cut_rect is not None:
+            self._cut_rect.setRect(QRectF(self._press_pos, pos).normalized())
+
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
@@ -498,20 +545,16 @@ class ProSnipScene(QGraphicsScene):
         if tool == "eraser" and self._eraser_item is not None:
             stroke = self._eraser_item
             self._eraser_item = None
-            victims = []
-            for item in list(self.items()):
-                if item is stroke or item.parentItem() is not None:
-                    continue
-                if isinstance(item, QGraphicsPixmapItem) and item.zValue() < 0:
-                    continue
-                if stroke.collidesWithItem(item):
-                    victims.append(item)
-            self.removeItem(stroke)
-            for item in victims:
-                self.removeItem(item)
-            if victims:
-                self._undo_stack.append(_RemoveCommand(victims))
-                self._redo_stack.clear()
+            self.erase_to_canvas(stroke)
+            return
+
+        if tool == "cutout" and self._cut_rect is not None:
+            rect = QRectF(self._cut_rect.rect())
+            self.removeItem(self._cut_rect)
+            self._cut_rect = None
+            self._tool = "select"
+            if rect.width() > 4 or rect.height() > 4:
+                self.cut_strip(rect)
             return
 
         elif tool == "crop" and self._crop_rect_item is not None:
@@ -531,6 +574,288 @@ class ProSnipScene(QGraphicsScene):
             return
 
         super().mouseReleaseEvent(event)
+
+    def mouseDoubleClickEvent(self, event):
+        if self._tool == "polygon":
+            self.finish_polygon()
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
+
+    def _update_poly_preview(self, hover: QPointF):
+        if self._poly_preview is None:
+            self._poly_preview = QGraphicsRectItem()
+            self._poly_preview.setPen(QPen(self._pen_color, 1, Qt.PenStyle.DashLine))
+            self._poly_preview.setBrush(QBrush(QColor(self._pen_color.red(), self._pen_color.green(), self._pen_color.blue(), 40)))
+            self._poly_preview.setZValue(50)
+            self.addItem(self._poly_preview)
+        points = list(self._poly_points) + [QPointF(hover)]
+        if len(points) < 2:
+            return
+        left = min(point.x() for point in points)
+        top = min(point.y() for point in points)
+        right = max(point.x() for point in points)
+        bottom = max(point.y() for point in points)
+        self._poly_preview.setRect(QRectF(left, top, max(1, right - left), max(1, bottom - top)))
+
+    def _cancel_polygon(self):
+        self._poly_points = []
+        if self._poly_preview is not None:
+            self.removeItem(self._poly_preview)
+            self._poly_preview = None
+
+    def finish_polygon(self):
+        points = list(self._poly_points)
+        self._cancel_polygon()
+        if len(points) < 3:
+            return None
+        origin = points[0]
+        local = [QPointF(point.x() - origin.x(), point.y() - origin.y()) for point in points]
+        item = self._place(PolygonItem(local, self._pen_color, self._fill_color, self._line_width))
+        item.setPos(origin)
+        self._push_undo(item)
+        return item
+
+    def duplicate_at(self, pos: QPointF):
+        """Ctrl+drag: copy the annotation under the cursor and leave the original."""
+        item = self._annotation_at(pos)
+        if item is None:
+            return None
+        clone = _clone_item(item)
+        if clone is None:
+            return None
+        clone.setZValue(item.zValue() + 1)
+        self.addItem(clone)
+        self.clearSelection()
+        clone.setSelected(True)
+        self._undo_stack.append(_AddCommand([clone]))
+        self._redo_stack.clear()
+        return clone
+
+    def _annotation_at(self, pos: QPointF):
+        for item in self.items(pos):
+            while item.parentItem() is not None and not isinstance(item.parentItem(), QGraphicsItemGroup):
+                item = item.parentItem()
+            if isinstance(item, QGraphicsPixmapItem) and item.zValue() < 0:
+                continue
+            if item.parentItem() is None or isinstance(item.parentItem(), QGraphicsItemGroup):
+                if isinstance(item.parentItem(), QGraphicsItemGroup):
+                    return item.parentItem()
+                return item
+        return None
+
+    def erase_to_canvas(self, stroke: StrokeItem):
+        """Rub out image pixels and the annotations underneath, back to the canvas."""
+        victims = []
+        for item in list(self.items()):
+            if item is stroke or item.parentItem() is not None:
+                continue
+            if isinstance(item, QGraphicsPixmapItem) and item.zValue() < 0:
+                continue
+            if stroke.collidesWithItem(item):
+                victims.append(item)
+        background = self.background_item()
+        before = QPixmap(background.pixmap()) if background is not None else None
+        scene_before = QRectF(self.sceneRect())
+        if background is not None and stroke._points:
+            image = background.pixmap().toImage().convertToFormat(QImage.Format.Format_ARGB32)
+            painter = QPainter(image)
+            painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Clear)
+            painter.setPen(QPen(
+                QColor(0, 0, 0, 255),
+                max(8, stroke.line_width),
+                Qt.PenStyle.SolidLine,
+                Qt.PenCapStyle.RoundCap,
+                Qt.PenJoinStyle.RoundJoin,
+            ))
+            path = QPainterPath()
+            for index, point in enumerate(stroke._points):
+                local = background.mapFromScene(stroke.mapToScene(point))
+                if index == 0:
+                    path.moveTo(local)
+                else:
+                    path.lineTo(local)
+            painter.drawPath(path)
+            painter.setPen(QPen(Qt.PenStyle.NoPen))
+            painter.setBrush(QBrush(QColor(0, 0, 0, 255)))
+            radius = max(4.0, stroke.line_width / 2.0)
+            for point in stroke._points:
+                local = background.mapFromScene(stroke.mapToScene(point))
+                painter.drawEllipse(local, radius, radius)
+            painter.end()
+            background.setPixmap(QPixmap.fromImage(image))
+        self.removeItem(stroke)
+        for item in victims:
+            self.removeItem(item)
+        if background is not None and before is not None:
+            self._undo_stack.append(_ImageCommand(
+                background, before, QPixmap(background.pixmap()), victims, [], scene_before, QRectF(self.sceneRect()),
+            ))
+            self._redo_stack.clear()
+            self.image_changed.emit()
+        elif victims:
+            self._undo_stack.append(_RemoveCommand(victims))
+            self._redo_stack.clear()
+
+    def cut_strip(self, rect: QRectF):
+        """Remove a horizontal or vertical band and close the gap."""
+        background = self.background_item()
+        if background is None:
+            return False
+        source = background.pixmap().toImage().convertToFormat(QImage.Format.Format_ARGB32)
+        width, height = source.width(), source.height()
+        band = rect.normalized().intersected(QRectF(0, 0, width, height))
+        if band.width() < 2 and band.height() < 2:
+            return False
+        horizontal = band.width() >= band.height()
+        before = QPixmap(background.pixmap())
+        scene_before = QRectF(self.sceneRect())
+        removed = []
+        moves = []
+        if horizontal:
+            y0 = max(0, int(band.top()))
+            y1 = min(height, int(math_ceil(band.bottom())))
+            gap = y1 - y0
+            if gap < 2 or gap >= height:
+                return False
+            target = QImage(width, height - gap, QImage.Format.Format_ARGB32)
+            target.fill(Qt.GlobalColor.transparent)
+            painter = QPainter(target)
+            painter.drawImage(0, 0, source, 0, 0, width, y0)
+            painter.drawImage(0, y0, source, 0, y1, width, height - y1)
+            painter.end()
+            self._shift_for_gap(removed, moves, horizontal=True, start=y0, end=y1, gap=gap)
+        else:
+            x0 = max(0, int(band.left()))
+            x1 = min(width, int(math_ceil(band.right())))
+            gap = x1 - x0
+            if gap < 2 or gap >= width:
+                return False
+            target = QImage(width - gap, height, QImage.Format.Format_ARGB32)
+            target.fill(Qt.GlobalColor.transparent)
+            painter = QPainter(target)
+            painter.drawImage(0, 0, source, 0, 0, x0, height)
+            painter.drawImage(x0, 0, source, x1, 0, width - x1, height)
+            painter.end()
+            self._shift_for_gap(removed, moves, horizontal=False, start=x0, end=x1, gap=gap)
+        background.setPixmap(QPixmap.fromImage(target))
+        background.setPos(0, 0)
+        self.setSceneRect(QRectF(0, 0, target.width(), target.height()))
+        for item in removed:
+            self.removeItem(item)
+        self._undo_stack.append(_ImageCommand(
+            background, before, QPixmap(background.pixmap()), removed, moves,
+            scene_before, QRectF(self.sceneRect()),
+        ))
+        self._redo_stack.clear()
+        self.image_changed.emit()
+        return True
+
+    def _shift_for_gap(self, removed, moves, horizontal: bool, start: int, end: int, gap: int):
+        for item in list(self._annotations()):
+            centre = item.sceneBoundingRect().center()
+            if horizontal:
+                inside = start <= centre.y() <= end
+                past = centre.y() > end
+                delta = QPointF(0, -gap)
+            else:
+                inside = start <= centre.x() <= end
+                past = centre.x() > end
+                delta = QPointF(-gap, 0)
+            if inside:
+                removed.append(item)
+            elif past:
+                item.moveBy(delta.x(), delta.y())
+                moves.append((item, delta.x(), delta.y()))
+
+    def group_selected(self):
+        chosen = [
+            item for item in self.selectedItems()
+            if item.parentItem() is None and not (isinstance(item, QGraphicsPixmapItem) and item.zValue() < 0)
+        ]
+        if len(chosen) < 2:
+            return None
+        group = QGraphicsItemGroup()
+        self.addItem(group)
+        for item in chosen:
+            group.addToGroup(item)
+        group.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, True)
+        group.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
+        self.clearSelection()
+        group.setSelected(True)
+        self._undo_stack.append(_GroupCommand(group, chosen))
+        self._redo_stack.clear()
+        return group
+
+    def ungroup_selected(self):
+        groups = [item for item in self.selectedItems() if isinstance(item, QGraphicsItemGroup)]
+        if not groups:
+            groups = [
+                item.parentItem() for item in self.selectedItems()
+                if isinstance(item.parentItem(), QGraphicsItemGroup)
+            ]
+        undone = []
+        for group in groups:
+            if group is None or group not in undone:
+                children = [child for child in group.childItems() if child.parentItem() is group]
+                for child in children:
+                    group.removeFromGroup(child)
+                self.removeItem(group)
+                self._undo_stack.append(_UngroupCommand(group, children))
+                undone.append(group)
+        if undone:
+            self._redo_stack.clear()
+        return undone
+
+    def flatten_selected(self):
+        background = self.background_item()
+        if background is None:
+            return False
+        selected = [
+            item for item in self.selectedItems()
+            if item is not background and item.parentItem() is None
+        ]
+        if not selected:
+            selected = [item for item in self._annotations() if item is not background]
+        if not selected:
+            return False
+        before = QPixmap(background.pixmap())
+        scene_before = QRectF(self.sceneRect())
+        hidden = []
+        keep = set(selected)
+        for item in self.items():
+            if item is background or item in keep:
+                continue
+            if item.isVisible():
+                item.setVisible(False)
+                hidden.append(item)
+        background.hide()
+        layer = QImage(before.width(), before.height(), QImage.Format.Format_ARGB32)
+        layer.fill(0)
+        painter = QPainter(layer)
+        self.render(painter, QRectF(0, 0, before.width(), before.height()), QRectF(0, 0, before.width(), before.height()))
+        painter.end()
+        background.show()
+        for item in hidden:
+            item.setVisible(True)
+        result = before.toImage().convertToFormat(QImage.Format.Format_ARGB32)
+        painter = QPainter(result)
+        painter.drawImage(0, 0, layer)
+        painter.end()
+        background.setPixmap(QPixmap.fromImage(result))
+        for item in selected:
+            self.removeItem(item)
+        self._undo_stack.append(_ImageCommand(
+            background, before, QPixmap(background.pixmap()), selected, [],
+            scene_before, QRectF(self.sceneRect()),
+        ))
+        self._redo_stack.clear()
+        self.image_changed.emit()
+        return True
+
+
+def math_ceil(value: float) -> int:
+    return int(value) if value == int(value) else int(value) + 1
 
 
 class _CanvasViewport(QWidget):
@@ -613,6 +938,14 @@ class ProSnipView(QGraphicsView):
         ):
             scene.redo()
             return
+        if (
+            not editing
+            and scene is not None
+            and scene._tool == "polygon"
+            and event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter)
+        ):
+            scene.finish_polygon()
+            return
         if event.key() == Qt.Key.Key_Space and not editing:
             self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
             return
@@ -637,6 +970,17 @@ class ProSnipView(QGraphicsView):
             self.setDragMode(QGraphicsView.DragMode.NoDrag)
             return
         super().keyReleaseEvent(event)
+
+    def mousePressEvent(self, event):
+        scene = self.scene()
+        if (
+            isinstance(scene, ProSnipScene)
+            and scene._tool == "select"
+            and event.button() == Qt.MouseButton.LeftButton
+            and event.modifiers() & Qt.KeyboardModifier.ControlModifier
+        ):
+            scene.duplicate_at(self.mapToScene(event.position().toPoint()))
+        super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
         super().mouseMoveEvent(event)
@@ -718,6 +1062,14 @@ def _style_snapshot(item) -> dict:
         "width": getattr(item, "line_width", None),
         "stroke": getattr(item, "stroke_enabled", None),
         "opacity": item.opacity(),
+        "shadow": bool(getattr(item, "shadow_enabled", False)),
+        "shadow_offset": getattr(item, "shadow_offset", None),
+        "shadow_blur": getattr(item, "shadow_blur", None),
+        "corner": getattr(item, "corner_radius", None),
+        "style": getattr(item, "style", None),
+        "start_cap": getattr(item, "start_cap", None),
+        "end_cap": getattr(item, "end_cap", None),
+        "darkness": getattr(item, "darkness", None),
     }
 
 
@@ -730,9 +1082,26 @@ def _restore_style(item, snap: dict) -> None:
         item.line_width = snap["width"]
     if snap["stroke"] is not None and hasattr(item, "stroke_enabled"):
         item.stroke_enabled = snap["stroke"]
+    if snap.get("corner") is not None and hasattr(item, "corner_radius"):
+        item.corner_radius = snap["corner"]
+    if snap.get("style") is not None and hasattr(item, "style"):
+        item.style = snap["style"]
+    if snap.get("start_cap") is not None and hasattr(item, "start_cap"):
+        item.start_cap = snap["start_cap"]
+    if snap.get("end_cap") is not None and hasattr(item, "end_cap"):
+        item.end_cap = snap["end_cap"]
+    if snap.get("darkness") is not None and hasattr(item, "darkness"):
+        item.darkness = snap["darkness"]
+    if "shadow" in snap:
+        item.shadow_enabled = bool(snap["shadow"])
+    if snap.get("shadow_offset") is not None:
+        item.shadow_offset = snap["shadow_offset"]
+    if snap.get("shadow_blur") is not None:
+        item.shadow_blur = snap["shadow_blur"]
     item.setOpacity(snap["opacity"])
     if hasattr(item, "_apply_style"):
         item._apply_style()
+    apply_shadow(item)
     item.update()
 
 
@@ -762,6 +1131,69 @@ class _RemoveCommand:
             scene.removeItem(item)
 
 
+class _ImageCommand:
+    """Pixmap edit plus any annotations removed or shifted to close a gap."""
+
+    def __init__(self, item, before, after, removed, moves, scene_before, scene_after):
+        self.item = item
+        self.before = before
+        self.after = after
+        self.removed = list(removed)
+        self.moves = list(moves)
+        self.scene_before = scene_before
+        self.scene_after = scene_after
+
+    def undo(self, scene):
+        self.item.setPixmap(self.before)
+        scene.setSceneRect(self.scene_before)
+        for item, dx, dy in self.moves:
+            item.moveBy(-dx, -dy)
+        for item in self.removed:
+            scene.addItem(item)
+        scene.image_changed.emit()
+
+    def redo(self, scene):
+        self.item.setPixmap(self.after)
+        scene.setSceneRect(self.scene_after)
+        for item, dx, dy in self.moves:
+            item.moveBy(dx, dy)
+        for item in self.removed:
+            scene.removeItem(item)
+        scene.image_changed.emit()
+
+
+class _GroupCommand:
+    def __init__(self, group, items):
+        self.group = group
+        self.items = list(items)
+
+    def undo(self, scene):
+        for item in self.items:
+            self.group.removeFromGroup(item)
+        scene.removeItem(self.group)
+
+    def redo(self, scene):
+        scene.addItem(self.group)
+        for item in self.items:
+            self.group.addToGroup(item)
+
+
+class _UngroupCommand:
+    def __init__(self, group, items):
+        self.group = group
+        self.items = list(items)
+
+    def undo(self, scene):
+        scene.addItem(self.group)
+        for item in self.items:
+            self.group.addToGroup(item)
+
+    def redo(self, scene):
+        for item in list(self.group.childItems()):
+            self.group.removeFromGroup(item)
+        scene.removeItem(self.group)
+
+
 def _clone_item(item):
     clone = None
     if isinstance(item, RectItem):
@@ -779,6 +1211,12 @@ def _clone_item(item):
         clone = BlurItem(QRectF(item.rect()), item.block)
     elif isinstance(item, ArrowItem):
         clone = ArrowItem(QPointF(item.start), QPointF(item.end), item.pen_color, item.line_width, item.style)
+        clone.start_cap = item.start_cap
+        clone.end_cap = item.end_cap
+    elif isinstance(item, PolygonItem):
+        clone = PolygonItem(item.points, item.pen_color, item.fill_color, item.line_width)
+    elif isinstance(item, SpotlightItem):
+        clone = SpotlightItem(QRectF(item.rect()), item.darkness)
     elif isinstance(item, StrokeItem):
         clone = StrokeItem(QColor(item.pen_color), item.line_width, item.highlighter)
         for point in item._points:
@@ -789,6 +1227,10 @@ def _clone_item(item):
         clone.setPos(item.pos())
     clone.setRotation(item.rotation())
     clone.setZValue(item.zValue())
+    clone.shadow_enabled = bool(getattr(item, "shadow_enabled", False))
+    clone.shadow_offset = getattr(item, "shadow_offset", 4)
+    clone.shadow_blur = getattr(item, "shadow_blur", 8)
+    apply_shadow(clone)
     return clone
 
 

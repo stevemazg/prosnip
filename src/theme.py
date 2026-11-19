@@ -190,6 +190,7 @@ QPushButton, QComboBox, QListWidget, QPlainTextEdit, QTextEdit, QLineEdit {{
 QAbstractSpinBox QLineEdit {{ background: transparent; border: none; padding: 0; min-height: 0; color: {colours['text']}; }}
 QPushButton:checked {{ background-color: {colours['accent']}; color: #ffffff; border-color: {colours['accent']}; }}
 QToolTip {{ background-color: #141414; color: #ffffff; border: 1px solid #ffffff; padding: 6px 8px; }}
+QSplitter::handle {{ background-color: {colours['border']}; }}
 """
 
 

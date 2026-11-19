@@ -7,6 +7,7 @@ from PyQt6.QtWidgets import (
     QAbstractSpinBox,
     QCheckBox,
     QColorDialog,
+    QComboBox,
     QFormLayout,
     QGridLayout,
     QHBoxLayout,
@@ -23,13 +24,17 @@ from PyQt6.QtWidgets import (
 from colour import ColourHistory
 from items import (
     ARROW_STYLES,
+    END_CAPS,
     ArrowItem,
     CalloutItem,
     EllipseItem,
     NumberItem,
+    PolygonItem,
     RectItem,
+    SpotlightItem,
     StrokeItem,
     TextItem,
+    apply_shadow,
 )
 from styles import STYLES, DEFAULT_STYLE
 from swatches import SwatchBook
@@ -176,6 +181,41 @@ class ToolOptions(QWidget):
         self._arrow_btn.clicked.connect(self.open_arrow_menu)
         form.addRow("", self._arrow_btn)
 
+        self._curve = QCheckBox("Curved")
+        self._curve.setObjectName("CurveToggle")
+        form.addRow("", self._curve)
+        self._start_label = QLabel("Ends")
+        self._start_cap = QComboBox()
+        self._start_cap.setObjectName("StartCap")
+        self._start_cap.addItems(["None", "Arrow", "Dot", "Square"])
+        self._end_cap = QComboBox()
+        self._end_cap.setObjectName("EndCap")
+        self._end_cap.addItems(["None", "Arrow", "Dot", "Square"])
+        self._end_cap.setCurrentText("Arrow")
+        ends = QWidget()
+        ends_row = QHBoxLayout(ends)
+        ends_row.setContentsMargins(0, 0, 0, 0)
+        ends_row.addWidget(self._start_cap, 1)
+        ends_row.addWidget(self._end_cap, 1)
+        self._ends = ends
+        form.addRow(self._start_label, ends)
+
+        self._radius_label, self._radius = self._pair(form, "Corner", 0, 48, 0, 64, True)
+        self._radius.setObjectName("CornerSpin")
+        self._shadow = QCheckBox("Shadow")
+        self._shadow.setObjectName("ShadowToggle")
+        form.addRow("", self._shadow)
+        self._shadow_offset_label, self._shadow_offset = self._pair(form, "Shadow offset", 0, 24, 4, 64, True)
+        self._shadow_blur_label, self._shadow_blur = self._pair(form, "Shadow blur", 0, 32, 8, 64, True)
+        self._dark_label, self._dark = self._pair(form, "Darkness", 20, 220, 140, 64, True)
+        self._dark.setObjectName("DarknessSpin")
+        self._cut_hint = QLabel(
+            "Drag a strip. A wide drag removes a horizontal band and a tall drag removes a vertical band. The gap closes."
+        )
+        self._cut_hint.setWordWrap(True)
+        self._cut_hint.setObjectName("CutHint")
+        form.addRow(self._cut_hint)
+
         self._width.valueChanged.connect(self._apply_width)
         self._font.valueChanged.connect(self._apply_font)
         self._opacity.valueChanged.connect(self._apply_opacity)
@@ -183,6 +223,14 @@ class ToolOptions(QWidget):
         self._step_spin.valueChanged.connect(self._apply_step)
         self._outline.toggled.connect(self._apply_outline)
         self._fill_opacity_spin.valueChanged.connect(self._apply_fill_opacity)
+        self._curve.toggled.connect(lambda _checked: self._apply_arrow_ends())
+        self._start_cap.currentTextChanged.connect(lambda _text: self._apply_arrow_ends())
+        self._end_cap.currentTextChanged.connect(lambda _text: self._apply_arrow_ends())
+        self._radius.valueChanged.connect(self._apply_radius)
+        self._shadow.toggled.connect(self._on_shadow_toggled)
+        self._shadow_offset.valueChanged.connect(lambda _value: self._apply_shadow())
+        self._shadow_blur.valueChanged.connect(lambda _value: self._apply_shadow())
+        self._dark.valueChanged.connect(self._apply_darkness)
         self._paint_swatches()
 
     def _pair(self, form, text, low, high, value, width, slider=False):
@@ -268,8 +316,21 @@ class ToolOptions(QWidget):
             self._font.setValue(self._font_of(item))
             self._next_spin.setValue(self._scene._next_number)
             self._outline.setChecked(self._outline_of(item))
+            self._radius.setValue(int(getattr(item, "corner_radius", self._scene.corner_radius) or 0))
+            self._shadow.setChecked(bool(getattr(item, "shadow_enabled", self._scene.shadow_enabled)))
+            self._shadow_offset.setValue(int(getattr(item, "shadow_offset", self._scene.shadow_offset) or 0))
+            self._shadow_blur.setValue(int(getattr(item, "shadow_blur", self._scene.shadow_blur) or 0))
+            self._dark.setValue(int(getattr(item, "darkness", self._scene.spotlight_darkness) or 140))
+            if isinstance(item, ArrowItem):
+                self._curve.setChecked(item.style == "curved")
+                self._start_cap.setCurrentText(item.start_cap.capitalize())
+                self._end_cap.setCurrentText(item.end_cap.capitalize())
+            else:
+                self._curve.setChecked(self._scene.arrow_style == "curved")
+                self._start_cap.setCurrentText(self._scene.arrow_start.capitalize())
+                self._end_cap.setCurrentText(self._scene.arrow_end.capitalize())
         kind = self._kind(tool, item)
-        if kind in {"shape", "callout"}:
+        if kind in {"shape", "callout", "polygon"}:
             self._opacity.setRange(0, 100)
             self._opacity.setValue(self._border_opacity)
             self._fill_opacity_spin.setValue(self._fill_opacity)
@@ -283,28 +344,43 @@ class ToolOptions(QWidget):
             self._opacity_label.setText("Opacity")
         self._paint_swatches()
         self._show_for(tool, item)
-        if isinstance(item, (RectItem, EllipseItem, CalloutItem)):
+        if isinstance(item, (RectItem, EllipseItem, CalloutItem, PolygonItem)) and not isinstance(item, SpotlightItem):
             self._push_scene_colours()
             self._remember()
         self._updating = False
 
     def _show_for(self, tool: str, item):
         kind = self._kind(tool, item)
-        shape = kind in {"shape", "callout"}
-        self._colour_btn.setVisible(not shape and kind != "crop")
-        self._colour_label.setVisible(not shape and kind != "crop")
+        shape = kind in {"shape", "callout", "polygon"}
+        plain = not shape and kind not in {"crop", "spotlight", "cutout"}
+        self._colour_btn.setVisible(plain)
+        self._colour_label.setVisible(plain)
         self._border_label.setVisible(shape)
         self._border_btn.setVisible(shape)
         self._fill_label.setVisible(shape)
         self._fill_btn.setVisible(shape)
         self._show(self._fill_opacity_label, self._fill_opacity_spin, shape)
-        self._show(self._width_label, self._width, kind in {"width", "shape", "arrow", "stroke", "callout"})
+        self._show(self._width_label, self._width, kind in {"width", "shape", "arrow", "stroke", "callout", "polygon"})
         self._show(self._font_label, self._font, kind in {"text", "number", "callout"})
-        self._show(self._opacity_label, self._opacity, kind not in {"crop", "width"})
+        self._show(self._opacity_label, self._opacity, kind not in {"crop", "width", "spotlight", "cutout"})
         self._show(self._next_label, self._next_spin, tool == "number")
         self._show(self._step_label, self._step_spin, isinstance(item, NumberItem))
         self._outline.setVisible(False if shape else kind == "callout")
-        self._arrow_btn.setVisible(kind == "arrow")
+        arrow = kind == "arrow"
+        self._arrow_btn.setVisible(arrow)
+        self._curve.setVisible(arrow)
+        self._start_label.setVisible(arrow)
+        self._ends.setVisible(arrow)
+        rounded = isinstance(item, RectItem) or (item is None and tool == "rect")
+        self._show(self._radius_label, self._radius, rounded and not isinstance(item, SpotlightItem))
+        shadow = self._supports_shadow(item, kind)
+        self._shadow.setVisible(shadow)
+        details = shadow and self._shadow.isChecked()
+        self._show(self._shadow_offset_label, self._shadow_offset, details)
+        self._show(self._shadow_blur_label, self._shadow_blur, details)
+        spot = kind == "spotlight"
+        self._show(self._dark_label, self._dark, spot)
+        self._cut_hint.setVisible(kind == "cutout")
 
     def _show(self, label, spin, visible: bool):
         label.setVisible(visible)
@@ -320,6 +396,10 @@ class ToolOptions(QWidget):
             return "text"
         if isinstance(item, CalloutItem):
             return "callout"
+        if isinstance(item, SpotlightItem):
+            return "spotlight"
+        if isinstance(item, PolygonItem):
+            return "polygon"
         if isinstance(item, (RectItem, EllipseItem)):
             return "shape"
         if isinstance(item, ArrowItem):
@@ -332,6 +412,12 @@ class ToolOptions(QWidget):
             return "text"
         if tool == "callout":
             return "callout"
+        if tool == "polygon":
+            return "polygon"
+        if tool == "spotlight":
+            return "spotlight"
+        if tool == "cutout":
+            return "cutout"
         if tool in {"rect", "ellipse"}:
             return "shape"
         if tool == "arrow":
@@ -344,10 +430,17 @@ class ToolOptions(QWidget):
             return "crop"
         return "basic"
 
+    def _supports_shadow(self, item, kind: str) -> bool:
+        if isinstance(item, SpotlightItem):
+            return False
+        if isinstance(item, (RectItem, EllipseItem, ArrowItem, StrokeItem, TextItem, CalloutItem, NumberItem, PolygonItem)):
+            return True
+        return kind in {"shape", "arrow", "stroke", "text", "number", "callout", "polygon"}
+
     def _selected(self):
         if self._scene is None:
             return None
-        kinds = (RectItem, EllipseItem, ArrowItem, TextItem, CalloutItem, StrokeItem, NumberItem)
+        kinds = (RectItem, EllipseItem, ArrowItem, TextItem, CalloutItem, StrokeItem, NumberItem, PolygonItem, SpotlightItem)
         for item in self._scene.selectedItems():
             if isinstance(item, kinds) and item.parentItem() is None:
                 return item
@@ -773,5 +866,89 @@ class ToolOptions(QWidget):
             self._scene.arrow_style = style
         item = self._selected()
         if isinstance(item, ArrowItem):
-            item.style = style
-            item.update()
+            def mutate(target):
+                target.style = style
+                target.update()
+            self._edit_shape(item, mutate)
+        self._updating = True
+        self._curve.setChecked(style == "curved")
+        self._updating = False
+
+    def _apply_arrow_ends(self):
+        if self._updating:
+            return
+        start = self._start_cap.currentText().lower()
+        end = self._end_cap.currentText().lower()
+        if start not in END_CAPS:
+            start = "none"
+        if end not in END_CAPS:
+            end = "arrow"
+        curved = self._curve.isChecked()
+        if self._scene is not None:
+            self._scene.arrow_start = start
+            self._scene.arrow_end = end
+            if curved:
+                self._scene.arrow_style = "curved"
+            elif self._scene.arrow_style == "curved":
+                self._scene.arrow_style = "plain"
+        item = self._selected()
+        if isinstance(item, ArrowItem):
+            def mutate(target):
+                target.start_cap = start
+                target.end_cap = end
+                if curved:
+                    target.style = "curved"
+                elif target.style == "curved":
+                    target.style = "plain"
+                target.update()
+            self._edit_shape(item, mutate)
+
+    def _apply_radius(self, value: int):
+        if self._updating:
+            return
+        if self._scene is not None:
+            self._scene.corner_radius = int(value)
+        item = self._selected()
+        if isinstance(item, RectItem) and not isinstance(item, SpotlightItem):
+            def mutate(target):
+                target.corner_radius = int(value)
+                target.update()
+            self._edit_shape(item, mutate)
+
+    def _on_shadow_toggled(self, checked: bool):
+        details = bool(checked) and self._shadow.isVisible()
+        self._show(self._shadow_offset_label, self._shadow_offset, details)
+        self._show(self._shadow_blur_label, self._shadow_blur, details)
+        self._apply_shadow()
+
+    def _apply_shadow(self):
+        if self._updating:
+            return
+        enabled = self._shadow.isChecked()
+        offset = int(self._shadow_offset.value())
+        blur = int(self._shadow_blur.value())
+        if self._scene is not None:
+            self._scene.shadow_enabled = enabled
+            self._scene.shadow_offset = offset
+            self._scene.shadow_blur = blur
+        item = self._selected()
+        if item is None or isinstance(item, SpotlightItem):
+            return
+        def mutate(target):
+            target.shadow_enabled = enabled
+            target.shadow_offset = offset
+            target.shadow_blur = blur
+            apply_shadow(target)
+        self._edit_shape(item, mutate)
+
+    def _apply_darkness(self, value: int):
+        if self._updating:
+            return
+        if self._scene is not None:
+            self._scene.spotlight_darkness = int(value)
+        item = self._selected()
+        if isinstance(item, SpotlightItem):
+            def mutate(target):
+                target.darkness = int(value)
+                target.update()
+            self._edit_shape(item, mutate)

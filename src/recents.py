@@ -5,7 +5,13 @@ from pathlib import Path
 
 from PyQt6.QtCore import QByteArray, QMimeData, Qt, pyqtSignal
 from PyQt6.QtGui import QDrag, QPixmap
-from PyQt6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QScrollArea, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QHBoxLayout, QLabel, QScrollArea, QToolButton, QVBoxLayout, QWidget
+
+CARD_W = 128
+THUMB_H = 52
+CAPTION_H = 18
+CARD_H = 4 + THUMB_H + 2 + CAPTION_H + 6
+TRAY_H = 4 + CARD_H + 14 + 4
 
 from PIL import Image
 
@@ -26,18 +32,31 @@ class RecentTray(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("RecentTray")
-        self.setFixedHeight(124)
+        self.setFixedHeight(TRAY_H)
         self._selected = set()
         outer = QVBoxLayout(self)
         outer.setContentsMargins(6, 4, 6, 4)
+        outer.setSpacing(0)
         self._row = QHBoxLayout()
+        self._row.setContentsMargins(0, 0, 0, 0)
         self._row.setSpacing(8)
         host = QWidget()
         host.setLayout(self._row)
+        host.setFixedHeight(CARD_H)
         scroll = QScrollArea()
+        scroll.setObjectName("RecentScroll")
         scroll.setWidgetResizable(False)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setStyleSheet(
+            "QScrollBar:horizontal { height: 8px; background: transparent; }"
+            "QScrollBar::handle:horizontal { background: palette(mid); min-width: 24px; }"
+            "QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0; height: 0; }"
+            "QScrollBar:vertical { width: 0; height: 0; }"
+        )
         scroll.setWidget(host)
+        self._scroll = scroll
         self._host = host
         outer.addWidget(scroll)
         self.reload()
@@ -77,44 +96,58 @@ class RecentTray(QWidget):
         cards.sort(key=lambda item: (not item[0], item[1].name))
         for _pinned, meta_path, meta in cards[:30]:
             self._row.addWidget(self._card(meta_path, meta))
-        self._row.addStretch(0)
-        width = 8 + max(1, len(cards[:30])) * 136
-        self._host.setMinimumSize(width, 108)
+        width = max(CARD_W, 8 + len(cards[:30]) * (CARD_W + 8))
+        self._host.setFixedHeight(CARD_H)
+        self._host.setMinimumWidth(width)
 
     def _card(self, meta_path: Path, meta: dict) -> QWidget:
         card = QWidget()
         card.setObjectName("RecentCard")
-        card.setFixedSize(128, 100)
+        card.setFixedSize(CARD_W, CARD_H)
         layout = QVBoxLayout(card)
-        layout.setContentsMargins(4, 4, 4, 2)
+        layout.setContentsMargins(4, 4, 4, 4)
         layout.setSpacing(2)
         thumb = QLabel()
-        thumb.setFixedSize(120, 64)
+        thumb.setFixedSize(CARD_W - 8, THUMB_H)
         thumb.setAlignment(Qt.AlignmentFlag.AlignCenter)
         path = meta.get("path") or ""
         pix = QPixmap(path)
         if not pix.isNull():
-            thumb.setPixmap(pix.scaled(120, 64, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+            thumb.setPixmap(pix.scaled(
+                CARD_W - 8, THUMB_H,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            ))
         layout.addWidget(thumb)
-        caption = QLabel(meta.get("title") or meta_path.stem)
-        caption.setObjectName("muted")
-        caption.setFixedHeight(16)
+        title = meta.get("title") or meta_path.stem
+        caption = QLabel(title)
+        caption.setObjectName("RecentCaption")
+        caption.setFixedHeight(CAPTION_H)
+        caption.setToolTip(title)
         layout.addWidget(caption)
-        pin = QPushButton("•", card)
+        pin = QToolButton(card)
+        pin.setText("•" if not meta.get("pinned") else "●")
         pin.setToolTip("Pin")
-        pin.setGeometry(4, 4, 18, 18)
+        pin.setAutoRaise(True)
+        pin.setFixedSize(16, 16)
+        pin.setGeometry(4, 4, 16, 16)
         pin.hide()
         pin.clicked.connect(lambda _checked=False, source=meta_path: self._pin(source))
-        close = QPushButton("×", card)
+        close = QToolButton(card)
+        close.setText("×")
         close.setToolTip("Remove from tray")
-        close.setGeometry(102, 4, 18, 18)
+        close.setAutoRaise(True)
+        close.setFixedSize(16, 16)
+        close.setGeometry(CARD_W - 20, 4, 16, 16)
         close.hide()
         close.clicked.connect(lambda _checked=False, source=meta_path: self._hide(source))
+        for button in (pin, close):
+            button.setStyleSheet(
+                "QToolButton { border: none; padding: 0; background: rgba(255,255,255,220); color: #1a1d21; }"
+            )
         card.enterEvent = lambda _event, a=pin, b=close: (a.show(), b.show())
         card.leaveEvent = lambda _event, a=pin, b=close: (a.hide(), b.hide())
         card.mousePressEvent = lambda _event, image_path=path: self.opened.emit(image_path)
-        if meta.get("pinned"):
-            pin.setText("●")
         card.setProperty("imagePath", path)
         return card
 
