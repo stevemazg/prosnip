@@ -14,6 +14,7 @@ from PyQt6.QtWidgets import (
     QMenu,
     QPushButton,
     QSpinBox,
+    QSlider,
     QWidget,
     QWidgetAction,
     QApplication,
@@ -148,14 +149,14 @@ class ToolOptions(QWidget):
         self._fill_btn.clicked.connect(lambda: self.open_colour_menu("fill"))
         form.addRow(self._fill_label, self._fill_btn)
 
-        self._width_label, self._width = self._pair(form, "Width", 1, 24, DEFAULT_STYLE.line_width, 72)
+        self._width_label, self._width = self._pair(form, "Width", 1, 24, DEFAULT_STYLE.line_width, 64, True)
         self._width.setObjectName("WidthSpin")
-        self._font_label, self._font = self._pair(form, "Font", 8, 72, DEFAULT_STYLE.font_size, 72)
+        self._font_label, self._font = self._pair(form, "Font", 8, 72, DEFAULT_STYLE.font_size, 64, True)
         self._font.setObjectName("FontSpin")
-        self._opacity_label, self._opacity = self._pair(form, "Opacity", 0, 100, self._border_opacity, 72)
+        self._opacity_label, self._opacity = self._pair(form, "Opacity", 0, 100, self._border_opacity, 64, True)
         self._opacity.setObjectName("OpacitySpin")
         self._fill_opacity_label, self._fill_opacity_spin = self._pair(
-            form, "Fill opacity", 0, 100, self._fill_opacity, 72
+            form, "Fill opacity", 0, 100, self._fill_opacity, 64, True
         )
         self._fill_opacity_spin.setObjectName("FillOpacitySpin")
         self._next_label, self._next_spin = self._pair(form, "Next number", 1, 999, 1, 72)
@@ -184,7 +185,7 @@ class ToolOptions(QWidget):
         self._fill_opacity_spin.valueChanged.connect(self._apply_fill_opacity)
         self._paint_swatches()
 
-    def _pair(self, form, text, low, high, value, width):
+    def _pair(self, form, text, low, high, value, width, slider=False):
         label = QLabel(text)
         spin = QSpinBox()
         spin.setRange(low, high)
@@ -200,7 +201,20 @@ class ToolOptions(QWidget):
         if edit is not None:
             edit.setPalette(palette)
             edit.setStyleSheet("color: palette(text); background: transparent; border: none; padding: 0; min-height: 0;")
-        form.addRow(label, spin)
+        if slider:
+            box = QWidget()
+            row = QHBoxLayout(box)
+            row.setContentsMargins(0, 0, 0, 0)
+            slide = QSlider(Qt.Orientation.Horizontal)
+            slide.setRange(low, high)
+            slide.setValue(value)
+            slide.valueChanged.connect(spin.setValue)
+            spin.valueChanged.connect(slide.setValue)
+            row.addWidget(slide, 1)
+            row.addWidget(spin)
+            form.addRow(label, box)
+        else:
+            form.addRow(label, spin)
         return label, spin
 
     def bind(self, scene, toolbar):

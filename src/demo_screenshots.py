@@ -14,7 +14,7 @@ from PyQt6.QtGui import QBrush, QColor, QGuiApplication, QPen
 from PyQt6.QtWidgets import QApplication
 
 log = logging.getLogger("prosnip.demo")
-# Screenshot grabs follow the editor shell: toolbar, sidebar and tray.
+# Screenshot grabs follow the editor shell: toolbar, sidebar, and tray.
 
 
 def demo_output_dir(argv: list[str]) -> Path | None:
