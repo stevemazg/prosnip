@@ -36,7 +36,7 @@ jobs:
           .venv\Scripts\python.exe -m pip install -r requirements.txt
           $env:Path = "$PWD\.venv\Scripts;$env:Path"
           .venv\Scripts\python.exe scripts/write_version_info.py
-          pyinstaller --noconfirm --clean --onedir --windowed --noupx --name ProSnip-Bob-Demo --exclude-module tkinter --version-file version_info.txt src/demo_main.py
+          pyinstaller --noconfirm --clean --onedir --windowed --noupx --name ProSnip-Bob-Demo --exclude-module tkinter --version-file version_info.txt --add-data "assets/checkbox-tick.png;assets" src/demo_main.py
 
       - name: Capture windows from the built executable
         run: |
@@ -99,7 +99,9 @@ jobs:
             "47-checks-light.png",
             "48-checks-dark.png",
             "49-delete-confirm.png",
-            "50-reopen-group.png"
+            "50-reopen-group.png",
+            "51-footer-size.png",
+            "52-crop-outside.png"
           )) {
             $file = Join-Path screenshots $name
             if (-not (Test-Path $file)) { throw "Missing $name" }

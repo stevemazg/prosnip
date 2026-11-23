@@ -26,6 +26,7 @@ class ProSnipScene(QGraphicsScene):
     number_edit_requested = pyqtSignal(object)
     style_changed = pyqtSignal()
     image_changed = pyqtSignal()
+    stack_changed = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -35,6 +36,7 @@ class ProSnipScene(QGraphicsScene):
         self._press_pos = QPointF()
         self._undo_stack = []
         self._redo_stack = []
+        self._move_before = {}
         self._last_stamp = None
         self._crop_rect_item = None
 
@@ -72,7 +74,7 @@ class ProSnipScene(QGraphicsScene):
                 return item
         return None
 
-    def edit_background(self, pixmap: QPixmap, point_fn=None):
+    def edit_background(self, pixmap: QPixmap, point_fn=None, drop_outside: bool = False):
         """Replace the picture and transform annotations. One undo step."""
         background = self.background_item()
         if background is None:
@@ -91,12 +93,19 @@ class ProSnipScene(QGraphicsScene):
         background.setPixmap(pixmap)
         background.setPos(0, 0)
         self.setSceneRect(QRectF(pixmap.rect()))
+        removed = []
+        if drop_outside:
+            bounds = QRectF(pixmap.rect())
+            for item in annotations:
+                if not _overlaps_image(item, bounds):
+                    removed.append(item)
+            for item in removed:
+                self.removeItem(item)
         after_geo = [(item, _geometry(item)) for item in annotations]
-        self._undo_stack.append(_GeometryImageCommand(
+        self._push(_GeometryImageCommand(
             background, before, QPixmap(pixmap), scene_before, QRectF(self.sceneRect()),
-            before_geo, after_geo,
+            before_geo, after_geo, removed,
         ))
-        self._redo_stack.clear()
         self.image_changed.emit()
         return True
 
@@ -200,6 +209,12 @@ class ProSnipScene(QGraphicsScene):
         self._undo_stack.append(item)
         self._redo_stack.clear()
         self.tool_used.emit(item)
+        self.stack_changed.emit()
+
+    def _push(self, command) -> None:
+        self._undo_stack.append(command)
+        self._redo_stack.clear()
+        self.stack_changed.emit()
 
     def step_numbers(self) -> list[int]:
         return [
@@ -231,6 +246,7 @@ class ProSnipScene(QGraphicsScene):
         self._redo_stack.append(entry)
         self.sync_next_number()
         self.style_changed.emit()
+        self.stack_changed.emit()
 
     def redo(self):
         if not self._redo_stack:
@@ -243,6 +259,7 @@ class ProSnipScene(QGraphicsScene):
         self._undo_stack.append(entry)
         self.sync_next_number()
         self.style_changed.emit()
+        self.stack_changed.emit()
 
     def close_style_edit(self) -> None:
         if self._undo_stack and isinstance(self._undo_stack[-1], _StyleCommand):
@@ -254,12 +271,11 @@ class ProSnipScene(QGraphicsScene):
         if isinstance(top, _StyleCommand) and top.item is item and top.open:
             mutate()
             top.after = _style_snapshot(item)
+            self.stack_changed.emit()
             return
         before = _style_snapshot(item)
         mutate()
-        command = _StyleCommand(item, before, _style_snapshot(item))
-        self._undo_stack.append(command)
-        self._redo_stack.clear()
+        self._push(_StyleCommand(item, before, _style_snapshot(item)))
 
     def copy_selected(self):
         self._clipboard = [item for item in self.selectedItems() if item.parentItem() is None]
@@ -277,8 +293,7 @@ class ProSnipScene(QGraphicsScene):
             self.clearSelection()
             for clone in clones:
                 clone.setSelected(True)
-            self._undo_stack.append(_AddCommand(clones))
-            self._redo_stack.clear()
+            self._push(_AddCommand(clones))
 
     def duplicate_selected(self):
         self.copy_selected()
@@ -337,8 +352,7 @@ class ProSnipScene(QGraphicsScene):
         for item in victims:
             self.removeItem(item)
         if victims:
-            self._undo_stack.append(_RemoveCommand(victims))
-            self._redo_stack.clear()
+            self._push(_RemoveCommand(victims))
         self.sync_next_number()
 
     def delete_all_annotations(self):
@@ -346,9 +360,20 @@ class ProSnipScene(QGraphicsScene):
         for item in victims:
             self.removeItem(item)
         if victims:
-            self._undo_stack.append(_RemoveCommand(victims))
-            self._redo_stack.clear()
+            self._push(_RemoveCommand(victims))
         self.sync_next_number()
+
+    def _finish_move(self) -> None:
+        before = self._move_before or {}
+        self._move_before = {}
+        moves = []
+        for item, origin in before.values():
+            if item.scene() is None:
+                continue
+            if item.pos() != origin:
+                moves.append((item, QPointF(origin), QPointF(item.pos())))
+        if moves:
+            self._push(_MoveCommand(moves))
 
     def bring_to_front(self):
         selected = [item for item in self.selectedItems() if item.parentItem() is None]
@@ -382,6 +407,7 @@ class ProSnipScene(QGraphicsScene):
 
         if tool == "select":
             super().mousePressEvent(event)
+            self._move_before = _position_snapshot(self)
             return
 
         if tool == "arrow":
@@ -588,6 +614,7 @@ class ProSnipScene(QGraphicsScene):
 
         if tool == "select":
             super().mouseReleaseEvent(event)
+            self._finish_move()
             return
 
         if self._current_item is not None:
@@ -684,8 +711,7 @@ class ProSnipScene(QGraphicsScene):
         self.addItem(clone)
         self.clearSelection()
         clone.setSelected(True)
-        self._undo_stack.append(_AddCommand([clone]))
-        self._redo_stack.clear()
+        self._push(_AddCommand([clone]))
         return clone
 
     def _annotation_at(self, pos: QPointF):
@@ -744,14 +770,12 @@ class ProSnipScene(QGraphicsScene):
         for item in victims:
             self.removeItem(item)
         if background is not None and before is not None:
-            self._undo_stack.append(_ImageCommand(
+            self._push(_ImageCommand(
                 background, before, QPixmap(background.pixmap()), victims, [], scene_before, QRectF(self.sceneRect()),
             ))
-            self._redo_stack.clear()
             self.image_changed.emit()
         elif victims:
-            self._undo_stack.append(_RemoveCommand(victims))
-            self._redo_stack.clear()
+            self._push(_RemoveCommand(victims))
 
     def cut_strip(self, rect: QRectF):
         """Remove a horizontal or vertical band and close the gap."""
@@ -799,11 +823,10 @@ class ProSnipScene(QGraphicsScene):
         self.setSceneRect(QRectF(0, 0, target.width(), target.height()))
         for item in removed:
             self.removeItem(item)
-        self._undo_stack.append(_ImageCommand(
+        self._push(_ImageCommand(
             background, before, QPixmap(background.pixmap()), removed, moves,
             scene_before, QRectF(self.sceneRect()),
         ))
-        self._redo_stack.clear()
         self.image_changed.emit()
         return True
 
@@ -839,8 +862,7 @@ class ProSnipScene(QGraphicsScene):
         group.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
         self.clearSelection()
         group.setSelected(True)
-        self._undo_stack.append(_GroupCommand(group, chosen))
-        self._redo_stack.clear()
+        self._push(_GroupCommand(group, chosen))
         return group
 
     def ungroup_selected(self):
@@ -857,10 +879,8 @@ class ProSnipScene(QGraphicsScene):
                 for child in children:
                     group.removeFromGroup(child)
                 self.removeItem(group)
-                self._undo_stack.append(_UngroupCommand(group, children))
+                self._push(_UngroupCommand(group, children))
                 undone.append(group)
-        if undone:
-            self._redo_stack.clear()
         return undone
 
     def flatten_all(self):
@@ -905,11 +925,10 @@ class ProSnipScene(QGraphicsScene):
         background.setPixmap(QPixmap.fromImage(result))
         for item in selected:
             self.removeItem(item)
-        self._undo_stack.append(_ImageCommand(
+        self._push(_ImageCommand(
             background, before, QPixmap(background.pixmap()), selected, [],
             scene_before, QRectF(self.sceneRect()),
         ))
-        self._redo_stack.clear()
         self.image_changed.emit()
         return True
 
@@ -1009,21 +1028,7 @@ class ProSnipView(QGraphicsView):
         if event.key() == Qt.Key.Key_Space and not editing:
             self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
             return
-        if (
-            not editing
-            and event.modifiers() == Qt.KeyboardModifier.ControlModifier
-            and event.key() == Qt.Key.Key_0
-        ):
-            self.resetTransform()
-            return
-        if (
-            not editing
-            and event.modifiers() == (
-                Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier
-            )
-            and event.key() == Qt.Key.Key_0
-        ):
-            self.fit_scene()
+        if not editing and _fit_or_actual(event, self):
             return
         super().keyPressEvent(event)
 
@@ -1193,6 +1198,48 @@ class _RemoveCommand:
             scene.removeItem(item)
 
 
+def _position_snapshot(scene) -> dict:
+    found = {}
+    for item in scene.selectedItems():
+        if item.parentItem() is not None:
+            continue
+        if isinstance(item, QGraphicsPixmapItem) and item.zValue() < 0:
+            continue
+        found[id(item)] = (item, QPointF(item.pos()))
+    return found
+
+
+def _overlaps_image(item, bounds: QRectF) -> bool:
+    if isinstance(item, SpotlightItem):
+        rect = item.mapRectToScene(item.rect())
+    else:
+        rect = item.sceneBoundingRect()
+    return rect.intersects(bounds)
+
+
+def _fit_or_actual(event: QKeyEvent, view) -> bool:
+    """Ctrl+0 is actual size. Fit is Ctrl+Shift+0 or Ctrl+Alt+0.
+
+    Shift+0 can arrive as ')' when Windows translates the key.
+    """
+    modifiers = event.modifiers()
+    if not (modifiers & Qt.KeyboardModifier.ControlModifier):
+        return False
+    key = event.key()
+    shift = bool(modifiers & Qt.KeyboardModifier.ShiftModifier)
+    alt = bool(modifiers & Qt.KeyboardModifier.AltModifier)
+    if key in (Qt.Key.Key_ParenRight, Qt.Key.Key_ParenLeft):
+        key = Qt.Key.Key_0
+        shift = True
+    if key != Qt.Key.Key_0:
+        return False
+    if shift or alt:
+        view.fit_scene()
+    else:
+        view.resetTransform()
+    return True
+
+
 def _geometry(item) -> dict:
     extra = {}
     if isinstance(item, (RectItem, EllipseItem, BlurItem, SpotlightItem)):
@@ -1287,8 +1334,24 @@ def _mapped_rect(item, rect: QRectF, point_fn) -> QRectF:
     return QRectF(min(xs), min(ys), max(xs) - min(xs), max(ys) - min(ys))
 
 
+class _MoveCommand:
+    def __init__(self, moves):
+        self.moves = list(moves)
+
+    def _place(self, index: int):
+        for item, before, after in self.moves:
+            if item.scene() is not None:
+                item.setPos(before if index == 0 else after)
+
+    def undo(self, scene):
+        self._place(0)
+
+    def redo(self, scene):
+        self._place(1)
+
+
 class _GeometryImageCommand:
-    def __init__(self, item, before, after, scene_before, scene_after, before_geo, after_geo):
+    def __init__(self, item, before, after, scene_before, scene_after, before_geo, after_geo, removed=None):
         self.item = item
         self.before = before
         self.after = after
@@ -1296,6 +1359,7 @@ class _GeometryImageCommand:
         self.scene_after = scene_after
         self.before_geo = before_geo
         self.after_geo = after_geo
+        self.removed = list(removed or [])
 
     def _apply(self, scene, pixmap, rect, geos):
         self.item.setPixmap(pixmap)
@@ -1306,9 +1370,15 @@ class _GeometryImageCommand:
 
     def undo(self, scene):
         self._apply(scene, self.before, self.scene_before, self.before_geo)
+        for item in self.removed:
+            if item.scene() is None:
+                scene.addItem(item)
 
     def redo(self, scene):
         self._apply(scene, self.after, self.scene_after, self.after_geo)
+        for item in self.removed:
+            if item.scene() is not None:
+                scene.removeItem(item)
 
 
 class _ImageCommand:

@@ -24,7 +24,6 @@ from theme import apply_theme, colours_for
 import io
 import logging
 import math
-import os
 import subprocess
 import sys
 from datetime import datetime
@@ -34,7 +33,7 @@ from PIL import Image, ImageOps
 log = logging.getLogger("prosnip")
 
 APP_NAME = "ProSnip-Bob"
-APP_VERSION = "1.8.3.0"
+APP_VERSION = "1.8.4.0"
 
 
 def clamp_crop_rect(rect: QRectF, width: int, height: int) -> QRect | None:
@@ -505,6 +504,8 @@ class EditorWindow(QMainWindow):
         self._view.setBackgroundBrush(QBrush(QColor(colours["workspace"])))
         if getattr(self, "_tray", None) is not None:
             self._tray.set_theme_mode(self._theme)
+        if getattr(self, "_options", None) is not None:
+            self._options.apply_colours(colours)
         if getattr(self, "_splitter", None) is not None:
             self._splitter.setHandleWidth(1)
             self._splitter.setChildrenCollapsible(False)
@@ -591,9 +592,12 @@ class EditorWindow(QMainWindow):
         view.addAction("Side bar", self._toggle_sidebar)
         view.addAction("Zoom in", lambda: self._view.scale(1.15, 1.15))
         view.addAction("Zoom out", lambda: self._view.scale(1 / 1.15, 1 / 1.15))
-        fit = view.addAction("Fit")
-        fit.setShortcut(QKeySequence("Ctrl+Shift+0"))
+        fit = view.addAction("Fit\tCtrl+Shift+0 or Ctrl+Alt+0")
         fit.triggered.connect(self._view.fit_scene)
+        for sequence in ("Ctrl+Shift+0", "Ctrl+Alt+0"):
+            shortcut = QShortcut(QKeySequence(sequence), self)
+            shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
+            shortcut.activated.connect(self._view.fit_scene)
         actual = view.addAction("Actual size")
         actual.setShortcut(QKeySequence("Ctrl+0"))
         actual.triggered.connect(self._actual_size)
@@ -961,6 +965,7 @@ class EditorWindow(QMainWindow):
         self._scene.selectionChanged.connect(self._refresh_status_tool)
         self._scene.image_changed.connect(self._on_image_changed)
         self._scene.tool_used.connect(self._mark_dirty)
+        self._scene.stack_changed.connect(self._mark_dirty)
         self._tray.delete_requested.connect(self._confirm_delete_capture)
 
     def _actual_size(self):
@@ -1119,9 +1124,19 @@ class EditorWindow(QMainWindow):
         self._scene.setSceneRect(QRectF(pixmap.rect()))
         self._pil_image = image
         self._scene.update()
+        self._update_footer()
 
-    def _commit_pil(self, image: Image.Image, point_fn) -> None:
-        if not self._scene.edit_background(pil_to_qpixmap(image), point_fn):
+    def _update_footer(self) -> None:
+        image = self._pil_image
+        if image is None:
+            return
+        if getattr(self, "_footer_size", None) is not None:
+            self._footer_size.setText(f"{image.width} × {image.height} px")
+        if getattr(self, "_status_size", None) is not None:
+            self._status_size.setText(f"{image.width} × {image.height}")
+
+    def _commit_pil(self, image: Image.Image, point_fn, drop_outside: bool = False) -> None:
+        if not self._scene.edit_background(pil_to_qpixmap(image), point_fn, drop_outside):
             return
         self._pil_image = image
         self._dirty = True
@@ -1176,7 +1191,11 @@ class EditorWindow(QMainWindow):
         if cropped_px.isNull():
             return
         left, top = float(crop.left()), float(crop.top())
-        self._commit_pil(_crop_pil(self._pil_image, crop), lambda point: QPointF(point.x() - left, point.y() - top))
+        self._commit_pil(
+            _crop_pil(self._pil_image, crop),
+            lambda point: QPointF(point.x() - left, point.y() - top),
+            drop_outside=True,
+        )
 
     def _on_image_changed(self):
         from capture import qpixmap_to_pil
@@ -1188,5 +1207,4 @@ class EditorWindow(QMainWindow):
             self._pil_image = qpixmap_to_pil(pixmap)
         except ValueError:
             return
-        if getattr(self, "_footer_size", None) is not None:
-            self._footer_size.setText(f"{pixmap.width()} × {pixmap.height()} px")
+        self._update_footer()

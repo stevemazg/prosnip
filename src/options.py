@@ -111,29 +111,26 @@ class ToolOptions(QWidget):
         self._style_item = None
         self._colour_menu = None
         self.setObjectName("ToolProperties")
+        self.apply_colours()
+        self._build()
+
+    def apply_colours(self, colours: dict | None = None) -> None:
+        from theme import active_colours, checkbox_qss
+
+        chosen = colours if colours is not None else active_colours()
         self.setStyleSheet(
             """
             QWidget#ToolProperties { background: transparent; }
             QLabel { color: palette(window-text); background: transparent; font-size: 12px; }
             QCheckBox { color: palette(window-text); background: transparent; spacing: 6px; }
-            QCheckBox::indicator {
-                width: 14px; height: 14px;
-                border: 2px solid palette(window-text);
-                background: palette(base);
-                border-radius: 2px;
-            }
-            QCheckBox::indicator:checked {
-                background: #4f46e5;
-                border: 2px solid #4f46e5;
-            }
             QPushButton#ArrowStyle {
                 background: palette(button); color: palette(button-text);
                 border: 1px solid palette(mid); border-radius: 3px;
                 padding: 2px 8px;
             }
             """
+            + checkbox_qss(chosen)
         )
-        self._build()
 
     def _build(self):
         form = QFormLayout(self)

@@ -104,6 +104,8 @@ def capture_demo_screenshots(folder: Path) -> int:
         saved.append(_checks(folder / "48-checks-dark.png", "dark"))
         saved.append(_delete_confirm(folder / "49-delete-confirm.png"))
         saved.append(_reopened(folder / "50-reopen-group.png"))
+        saved.append(_footer_switch(folder / "51-footer-size.png"))
+        saved.append(_crop_outside(folder / "52-crop-outside.png"))
         _assert_sizes()
         editor.close()
     except Exception:
@@ -642,6 +644,7 @@ def _checks(path: Path, mode: str) -> Path:
     window._options._curve.setVisible(True)
     window._options._shadow.setChecked(True)
     window._options._outline.setChecked(True)
+    window._options._curve.setChecked(False)
     _present(window, 1024, 780)
     window._sidebar._scroll.ensureWidgetVisible(window._options._shadow)
     QApplication.processEvents()
@@ -706,6 +709,47 @@ def _reopened(path: Path) -> Path:
             os.environ.pop("LOCALAPPDATA", None)
         else:
             os.environ["LOCALAPPDATA"] = previous
+
+
+def _footer_switch(path: Path) -> Path:
+    import tempfile
+    from editor import EditorWindow
+
+    previous = os.environ.get("LOCALAPPDATA")
+    os.environ["LOCALAPPDATA"] = tempfile.mkdtemp()
+    window = EditorWindow(Image.new("RGB", (150, 100), "#d7e6f5"))
+    try:
+        small = window._active_path
+        window.receive_capture(Image.new("RGB", (640, 480), "#f4e4c4"), "large")
+        window._open_recent(small)
+        _present(window, 1024, 680)
+        return _grab(window, path)
+    finally:
+        window.close()
+        if previous is None:
+            os.environ.pop("LOCALAPPDATA", None)
+        else:
+            os.environ["LOCALAPPDATA"] = previous
+
+
+def _crop_outside(path: Path) -> Path:
+    from editor import EditorWindow
+    from PyQt6.QtGui import QPixmap
+    from items import ImageOverlayItem, RectItem
+
+    window = EditorWindow(Image.new("RGB", (320, 180), "#d7e6f5"))
+    try:
+        scene = window._scene
+        scene.addItem(RectItem(QRectF(180, 50, 70, 48), QColor("#e00000"), QColor(224, 0, 0, 70), 2))
+        scene.addItem(RectItem(QRectF(16, 50, 70, 48), QColor("#128a3e"), QColor(18, 138, 62, 70), 2))
+        pix = QPixmap(28, 20)
+        pix.fill(QColor("#111111"))
+        scene.addItem(ImageOverlayItem(pix, QPointF(-40, 40)))
+        window._on_crop_requested(QRectF(120, 20, 180, 130))
+        _present(window, 1024, 680)
+        return _grab(window, path)
+    finally:
+        window.close()
 
 
 def _canvas_demo(path: Path) -> Path:

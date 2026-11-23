@@ -8,6 +8,8 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor, QFont, QGuiApplication, QPalette
 from PyQt6.QtWidgets import QApplication
 
+from pathlib import Path
+
 WINDOW = QColor("#2b2b2b")
 PANEL = QColor("#323232")
 RAISED = QColor("#383838")
@@ -70,6 +72,7 @@ LIGHT = {
     "workspace": "#f4f5f6",
     "tray_fill": "#c7d2fe",
     "tray_text": "#3730a3",
+    "indicator": "#3730a3",
 }
 DARK = {
     "window": "#141616",
@@ -82,11 +85,47 @@ DARK = {
     "workspace": "#2b2b2b",
     "tray_fill": "#1e1b4b",
     "tray_text": "#e0e7ff",
+    "indicator": "#818cf8",
 }
+
+
+def asset_file(name: str) -> Path:
+    """A file shipped beside the source, or inside the frozen application."""
+    import sys
+
+    if getattr(sys, "frozen", False):
+        root = Path(getattr(sys, "_MEIPASS", Path(sys.executable).resolve().parent))
+    else:
+        root = Path(__file__).resolve().parent.parent
+    return root / "assets" / name
+
+
+def checkbox_qss(colours: dict) -> str:
+    tick = asset_file("checkbox-tick.png").as_posix()
+    return f"""
+QCheckBox::indicator {{
+    width: 14px; height: 14px;
+    border: 2px solid {colours['text']};
+    background: {colours['panel']};
+    border-radius: 2px;
+}}
+QCheckBox::indicator:checked {{
+    background: {colours['indicator']};
+    border: 2px solid {colours['indicator']};
+    image: url("{tick}");
+}}
+"""
 
 
 def colours_for(mode: str) -> dict:
     return DARK if mode == "dark" else LIGHT
+
+
+_ACTIVE = dict(LIGHT)
+
+
+def active_colours() -> dict:
+    return _ACTIVE
 
 
 def resolved_mode(mode: str) -> str:
@@ -113,16 +152,7 @@ QPushButton, QComboBox, QListWidget, QPlainTextEdit, QTextEdit, QLineEdit {{
 }}
 QAbstractSpinBox QLineEdit {{ background: transparent; border: none; padding: 0; min-height: 0; color: {colours['text']}; }}
 QPushButton:checked {{ background-color: {colours['accent']}; color: #ffffff; border-color: {colours['accent']}; }}
-QCheckBox::indicator {{
-    width: 14px; height: 14px;
-    border: 2px solid {colours['text']};
-    background: {colours['panel']};
-    border-radius: 2px;
-}}
-QCheckBox::indicator:checked {{
-    background: {colours['accent']};
-    border: 2px solid {colours['accent']};
-}}
+{checkbox_qss(colours)}
 QToolTip {{ background-color: #141414; color: #ffffff; border: 1px solid #ffffff; padding: 6px 8px; }}
 QSplitter::handle {{ background-color: {colours['border']}; }}
 """
@@ -133,6 +163,8 @@ def apply_theme(mode: str, app: QApplication | None = None) -> str:
     app = app or QApplication.instance()
     resolved = resolved_mode(mode)
     colours = colours_for(resolved)
+    global _ACTIVE
+    _ACTIVE = dict(colours)
     global WINDOW, PANEL, RAISED, TEXT, MUTED, ACCENT, BORDER
     WINDOW = QColor(colours["window"])
     PANEL = QColor(colours["panel"])

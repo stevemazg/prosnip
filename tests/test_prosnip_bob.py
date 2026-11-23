@@ -10,11 +10,9 @@ import json
 import logging
 import os
 import time
-import queue
 import sys
 import tempfile
 import unittest
-from datetime import datetime
 from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -24,7 +22,7 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from PyQt6.QtCore import QEvent, QPoint, QPointF, QRect, QRectF, QSize, Qt
+from PyQt6.QtCore import QEvent, QPoint, QPointF, QRect, QRectF, Qt
 from PyQt6.QtGui import QBrush, QColor, QImage, QKeyEvent, QMouseEvent, QPainter, QPen, QPixmap
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication, QSystemTrayIcon, QWidget
@@ -681,11 +679,13 @@ class AppTests(unittest.TestCase):
             "pyinstaller --noconfirm --clean --onedir --windowed --noupx "
             "--name ProSnip-Bob --exclude-module tkinter "
             "--version-file version_info.txt --add-data \"LICENSE;.\" "
-            "--add-data \"THIRD_PARTY_NOTICES;.\" src/main.py"
+            "--add-data \"THIRD_PARTY_NOTICES;.\" --add-data \"assets/checkbox-tick.png;assets\" src/main.py"
         )
         self.assertIn(command, build)
         self.assertIn(command, workflow)
         self.assertIn(command, readme)
+        self.assertIn("/nopause", build)
+        self.assertGreaterEqual(build.count("if errorlevel 1"), 2)
         self.assertNotIn("--onefile", build)
         self.assertNotIn("--onefile", workflow)
         self.assertIn("src/editor.py", workflow)
@@ -1617,18 +1617,20 @@ class Quality183Tests(unittest.TestCase):
                 self.assertIsNotNone(group)
                 pix = QPixmap(12, 8)
                 pix.fill(QColor("#111111"))
-                scene.addItem(items.ImageOverlayItem(pix, QPointF(8, 8)))
-                scene.addItem(items.EllipseItem(QRectF(4, 40, 18, 12), QColor("#111"), QColor(0, 0, 0, 0), 1))
-                scene.addItem(items.ArrowItem(QPointF(4, 70), QPointF(40, 80), QColor("#111"), 2, "curved"))
+                scene.addItem(items.ImageOverlayItem(pix, QPointF(80, 20)))
+                scene.addItem(items.EllipseItem(QRectF(80, 40, 18, 12), QColor("#111"), QColor(0, 0, 0, 0), 1))
+                scene.addItem(items.ArrowItem(QPointF(80, 70), QPointF(130, 80), QColor("#111"), 2, "curved"))
                 scene.addItem(items.TextItem("Note", QPointF(50, 60), QColor("#111"), 12))
                 scene.addItem(items.NumberItem(2, QPointF(120, 40), QColor("#e00000")))
                 stroke = items.StrokeItem(QColor("#111"), 2)
                 stroke.add_point(QPointF(140, 70))
                 stroke.add_point(QPointF(170, 80))
                 scene.addItem(stroke)
-                scene.addItem(items.PolygonItem(
+                polygon = items.PolygonItem(
                     [QPointF(0, 0), QPointF(10, 0), QPointF(5, 8)], QColor("#111"), QColor(0, 0, 0, 0), 1,
-                ))
+                )
+                polygon.setPos(QPointF(100, 70))
+                scene.addItem(polygon)
                 scene.addItem(items.SpotlightItem(QRectF(150, 10, 30, 20), 100))
                 scene.addItem(items.BlurItem(QRectF(150, 40, 20, 12), 4))
                 scene.addItem(items.StampItem("ok", QPointF(150, 70)))
@@ -1751,25 +1753,222 @@ class Quality183Tests(unittest.TestCase):
 
     def test_checkbox_indicator_is_visible_in_both_themes(self):
         from PyQt6.QtWidgets import QCheckBox
-        from theme import apply_theme
+        from theme import apply_theme, colours_for, contrast_ratio
 
         for mode in ("light", "dark"):
+            colours = colours_for(mode)
+            indicator = QColor(colours["indicator"])
+            self.assertGreaterEqual(contrast_ratio(indicator, QColor(colours["window"])), 3.0, mode)
+            self.assertGreaterEqual(contrast_ratio(indicator, QColor(colours["panel"])), 3.0, mode)
             apply_theme(mode)
             box = QCheckBox("Shadow")
             box.setChecked(True)
-            box.resize(80, 24)
+            box.resize(120, 28)
+            box.show()
+            QApplication.processEvents()
             image = box.grab().toImage()
-            found = False
-            for y in range(image.height()):
-                for x in range(image.width()):
-                    colour = image.pixelColor(x, y)
-                    if abs(colour.red() - 79) < 40 and colour.blue() > 160 and colour.green() < 120:
-                        found = True
-                        break
-                if found:
-                    break
-            self.assertTrue(found, mode)
+            self.assertTrue(_tick_on_indicator(image, indicator), mode)
+            empty = QCheckBox("Curved")
+            empty.setChecked(False)
+            empty.resize(120, 28)
+            empty.show()
+            QApplication.processEvents()
+            plain = empty.grab().toImage()
+            self.assertFalse(_tick_on_indicator(plain, indicator), mode)
             box.deleteLater()
+            empty.deleteLater()
+
+
+def _tick_on_indicator(image: QImage, indicator: QColor) -> bool:
+    """A white tick drawn on the indicator fill, not a white panel."""
+    width, height = image.width(), image.height()
+
+    def close(colour: QColor, target: QColor, tol: int = 28) -> bool:
+        return (
+            abs(colour.red() - target.red()) <= tol
+            and abs(colour.green() - target.green()) <= tol
+            and abs(colour.blue() - target.blue()) <= tol
+        )
+
+    for y in range(1, height - 1):
+        for x in range(1, width - 1):
+            colour = image.pixelColor(x, y)
+            if colour.red() < 230 or colour.green() < 230 or colour.blue() < 230:
+                continue
+            for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                if close(image.pixelColor(x + dx, y + dy), indicator):
+                    return True
+    return False
+
+
+class Quality184Tests(unittest.TestCase):
+    def test_footer_follows_the_capture_that_is_open(self):
+        previous = os.environ.get("LOCALAPPDATA")
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                os.environ["LOCALAPPDATA"] = tmp
+                window = editor.EditorWindow(Image.new("RGB", (150, 100), "white"))
+                window._prompt_on_close = False
+                small = window._active_path
+                window.receive_capture(Image.new("RGB", (640, 480), "blue"), "large")
+                self.assertEqual(window._footer_size.text(), "640 × 480 px")
+                window._open_recent(small)
+                self.assertEqual(window._footer_size.text(), "150 × 100 px")
+                window.close()
+        finally:
+            if previous is None:
+                os.environ.pop("LOCALAPPDATA", None)
+            else:
+                os.environ["LOCALAPPDATA"] = previous
+
+    def test_crop_drops_annotations_outside_the_new_picture(self):
+        previous = os.environ.get("LOCALAPPDATA")
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                os.environ["LOCALAPPDATA"] = tmp
+                window = editor.EditorWindow(Image.new("RGB", (200, 100), "white"))
+                window._prompt_on_close = False
+                pix = QPixmap(16, 12)
+                pix.fill(QColor("#ff00ff"))
+                overlay = items.ImageOverlayItem(pix, QPointF(-40, 10))
+                window._scene.addItem(overlay)
+                window._on_crop_requested(QRectF(20, 0, 120, 80))
+                self.assertIsNone(overlay.scene())
+                rendered = window._render_scene()
+                seen = False
+                for y in range(rendered.height()):
+                    for x in range(rendered.width()):
+                        pixel = rendered.pixelColor(x, y)
+                        if pixel.red() > 200 and pixel.blue() > 200 and pixel.green() < 40:
+                            seen = True
+                self.assertFalse(seen)
+                window.autosave_active()
+                from persist import read_psnip
+                saved = read_psnip(window._active_path)
+                self.assertIsNotNone(saved)
+                self.assertNotIn("ImageOverlayItem", [item.__class__.__name__ for item in saved[0]])
+                window._scene.undo()
+                self.assertIs(overlay.scene(), window._scene)
+                window.close()
+        finally:
+            if previous is None:
+                os.environ.pop("LOCALAPPDATA", None)
+            else:
+                os.environ["LOCALAPPDATA"] = previous
+
+    def test_edits_on_the_undo_stack_mark_the_document_dirty(self):
+        window = editor.EditorWindow(Image.new("RGB", (80, 40), "white"))
+        self.addCleanup(window.close)
+        window._prompt_on_close = False
+        rect = items.RectItem(QRectF(4, 4, 20, 12), QColor("#111111"), QColor(0, 0, 0, 0), 1)
+        window._scene.addItem(rect)
+        window._dirty = False
+        window._scene.edit_style(rect, lambda: setattr(rect, "line_width", 6))
+        self.assertTrue(window._dirty)
+        window._dirty = False
+        rect.setSelected(True)
+        window._scene.delete_selected()
+        self.assertTrue(window._dirty)
+        window._dirty = False
+        window._scene.undo()
+        self.assertTrue(window._dirty)
+        window._dirty = False
+        window._scene._move_before = {id(rect): (rect, QPointF(rect.pos()))}
+        rect.setPos(QPointF(12, 6))
+        window._scene._finish_move()
+        self.assertTrue(window._dirty)
+        window._dirty = False
+        window._scene.undo()
+        self.assertTrue(window._dirty)
+
+    def test_opacity_zero_and_strokes_round_trip(self):
+        from persist import dump_item, load_item
+
+        rect = items.RectItem(QRectF(0, 0, 8, 8), QColor("#111111"), QColor(0, 0, 0, 0), 1)
+        rect.setOpacity(0)
+        loaded = load_item(dump_item(rect))
+        self.assertEqual(loaded.opacity(), 0)
+        arrow = items.ArrowItem(QPointF(0, 0), QPointF(10, 4), QColor("#111111"), 2, "plain")
+        arrow.stroke_enabled = False
+        self.assertFalse(load_item(dump_item(arrow)).stroke_enabled)
+        callout = items.CalloutItem(QPointF(0, 0), QColor("#111"), QColor("#fff"), QColor("#111"), 2, 12)
+        callout.stroke_enabled = False
+        self.assertFalse(load_item(dump_item(callout)).stroke_enabled)
+
+    def test_psnip_hash_rejects_a_mismatched_picture(self):
+        import persist
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "shot.png"
+            image = Image.new("RGB", (12, 8), "red")
+            item = items.RectItem(QRectF(1, 1, 4, 4), QColor("#111"), QColor(0, 0, 0, 0), 1)
+            order = []
+            real = persist.os.replace
+
+            def spy(src, dst):
+                order.append(Path(dst).suffix)
+                return real(src, dst)
+
+            persist.os.replace = spy
+            try:
+                persist.write_psnip(str(path), [item], 1, image)
+            finally:
+                persist.os.replace = real
+            self.assertEqual(order, [".psnip", ".png"])
+            Image.new("RGB", (12, 8), "blue").save(path)
+            with self.assertLogs("prosnip", level="ERROR") as caught:
+                self.assertIsNone(persist.read_psnip(str(path)))
+            self.assertTrue(any("does not match" in line for line in caught.output))
+
+    def test_failed_recycle_is_logged_and_linux_trash_uses_a_move(self):
+        from recents import recycle_file
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "gone.png"
+            path.write_bytes(b"png")
+            recycle_file(path)
+            self.assertFalse(path.is_file())
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "stuck.png"
+            path.write_bytes(b"png")
+            import recents
+            original = recents._windows_recycle if sys.platform == "win32" else recents._trash_move
+            if sys.platform == "win32":
+                recents._windows_recycle = lambda _path: False
+            else:
+                recents._trash_move = lambda _path: False
+            try:
+                with self.assertLogs("prosnip", level="ERROR") as caught:
+                    self.assertFalse(recycle_file(path))
+            finally:
+                if sys.platform == "win32":
+                    recents._windows_recycle = original
+                else:
+                    recents._trash_move = original
+            self.assertTrue(any("Could not recycle" in line for line in caught.output))
+            self.assertTrue(path.is_file())
+
+    def test_shift_zero_and_alt_zero_fit_the_view(self):
+        window = editor.EditorWindow(Image.new("RGB", (400, 300), "white"))
+        self.addCleanup(window.close)
+        window._prompt_on_close = False
+        window.show()
+        window._view.setFocus()
+        window._view.scale(2, 2)
+        window._view.keyPressEvent(QKeyEvent(
+            QEvent.Type.KeyPress,
+            Qt.Key.Key_ParenRight,
+            Qt.KeyboardModifier.ControlModifier,
+        ))
+        self.assertLess(window._view.transform().m11(), 1.5)
+        window._view.scale(3, 3)
+        window._view.keyPressEvent(QKeyEvent(
+            QEvent.Type.KeyPress,
+            Qt.Key.Key_0,
+            Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier,
+        ))
+        self.assertLess(window._view.transform().m11(), 2.0)
+        self.assertTrue(any("Ctrl+Alt+0" in action.text() for action in window._view_menu.actions()))
 
 
 if __name__ == "__main__":

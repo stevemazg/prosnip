@@ -43,11 +43,8 @@ def purge_expired(days: int) -> None:
             if not _inside_library(path):
                 log.error("Refusing to purge %s; it is outside the library", path)
                 continue
-            try:
-                if path.is_file():
-                    path.unlink()
-            except OSError:
-                log.exception("Could not delete %s", path)
+            if path.is_file():
+                recycle_file(path)
 
 
 def _inside_library(path: Path) -> bool:
@@ -71,8 +68,19 @@ def recycle_file(path: Path) -> bool:
     """Move a file to the Windows Recycle Bin, or to the desktop trash elsewhere."""
     if not path.is_file():
         return True
-    if sys.platform == "win32":
-        return _windows_recycle(path)
+    try:
+        ok = _windows_recycle(path) if sys.platform == "win32" else _trash_move(path)
+    except OSError:
+        log.exception("Could not recycle %s", path)
+        return False
+    if not ok:
+        log.error("Could not recycle %s", path)
+    return ok
+
+
+def _trash_move(path: Path) -> bool:
+    import shutil
+
     trash = Path.home() / ".local" / "share" / "Trash" / "files"
     trash.mkdir(parents=True, exist_ok=True)
     dest = trash / path.name
@@ -80,7 +88,7 @@ def recycle_file(path: Path) -> bool:
     while dest.exists():
         dest = trash / f"{path.stem}-{index}{path.suffix}"
         index += 1
-    path.replace(dest)
+    shutil.move(str(path), str(dest))
     return True
 
 
@@ -293,10 +301,7 @@ class RecentTray(QWidget):
             if path.is_file() and not _inside_library(path):
                 log.error("Refusing to recycle %s; it is outside the library", path)
                 continue
-            try:
-                recycle_file(path)
-            except OSError:
-                log.exception("Could not recycle %s", path)
+            recycle_file(path)
         if self._current == image_path:
             self._current = ""
         self.reload()

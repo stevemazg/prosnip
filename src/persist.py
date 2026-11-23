@@ -1,6 +1,7 @@
 """Save and restore a capture: the edited picture and its annotations."""
 
 import base64
+import hashlib
 import json
 import logging
 import os
@@ -60,7 +61,8 @@ def _common(item) -> dict:
 
 
 def _apply_common(item, payload: dict) -> None:
-    item.setOpacity(float(payload.get("opacity") or 1))
+    opacity = payload.get("opacity", 1)
+    item.setOpacity(1.0 if opacity is None else float(opacity))
     item.shadow_enabled = bool(payload.get("shadow"))
     item.shadow_offset = int(payload.get("shadow_offset") or 0)
     item.shadow_blur = int(payload.get("shadow_blur") or 0)
@@ -204,6 +206,7 @@ def load_item(payload: dict):
         )
         item.start_cap = payload.get("start_cap") or "none"
         item.end_cap = payload.get("end_cap") or "arrow"
+        item.stroke_enabled = bool(payload.get("stroke", True))
     elif kind == "TextItem":
         item = TextItem(payload.get("text") or "", pos, QColor(payload["colour"]), int(payload.get("size") or 14))
         item.set_bold(bool(payload.get("bold")))
@@ -219,6 +222,7 @@ def load_item(payload: dict):
         item._text = payload.get("text") or ""
         item._doc.setPlainText(item._text)
         item.set_rect(QRectF(*payload["rect"]))
+        item.stroke_enabled = bool(payload.get("stroke", True))
     elif kind == "NumberItem":
         item = NumberItem(int(payload.get("number") or 1), pos, QColor(payload["colour"]))
     elif kind == "StrokeItem":
@@ -245,21 +249,38 @@ def load_item(payload: dict):
 
 
 def write_psnip(image_path: str, items, next_number: int, image=None) -> None:
-    """Write the picture and the annotation file atomically."""
+    """Write the picture and the annotation file as a matching pair.
+
+    The annotation file is replaced first, carrying the hash of the new
+    picture. A crash between the two replaces leaves a mismatch, which
+    load treats as unusable annotations rather than a torn file.
+    """
     folder = Path(image_path).parent
     folder.mkdir(parents=True, exist_ok=True)
+    png_temp = Path(str(image_path) + ".tmp")
+    png_bytes = None
     if image is not None:
-        temporary = Path(str(image_path) + ".tmp")
-        image.save(temporary, "PNG")
-        os.replace(temporary, image_path)
+        image.save(png_temp, "PNG")
+        png_bytes = png_temp.read_bytes()
+    elif Path(image_path).is_file():
+        png_bytes = Path(image_path).read_bytes()
     payload = {
         "next": int(next_number),
         "items": [row for row in (dump_item(item) for item in items) if row is not None],
     }
+    if png_bytes is not None:
+        payload["image_sha256"] = hashlib.sha256(png_bytes).hexdigest()
     path = psnip_path(image_path)
     temporary = Path(str(path) + ".tmp")
     temporary.write_text(json.dumps(payload), encoding="utf-8")
-    os.replace(temporary, path)
+    try:
+        os.replace(temporary, path)
+    except Exception:
+        if image is not None:
+            png_temp.unlink(missing_ok=True)
+        raise
+    if image is not None:
+        os.replace(png_temp, image_path)
 
 
 def read_psnip(image_path: str) -> tuple[list, int] | None:
@@ -274,6 +295,19 @@ def read_psnip(image_path: str) -> tuple[list, int] | None:
     if not isinstance(payload, dict):
         log.error("Capture file %s is not an object", path)
         return None
+    digest = payload.get("image_sha256")
+    if digest:
+        try:
+            actual = hashlib.sha256(Path(image_path).read_bytes()).hexdigest()
+        except OSError:
+            log.exception("Could not check the picture for %s", path)
+            return None
+        if actual != digest:
+            log.error(
+                "Annotation file %s does not match the picture; annotations were left unused",
+                path,
+            )
+            return None
     items = []
     for row in payload.get("items") or []:
         if not isinstance(row, dict):
