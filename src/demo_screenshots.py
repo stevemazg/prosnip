@@ -626,15 +626,25 @@ def _four_captures(path: Path) -> Path:
 
 
 def _checks(path: Path, mode: str) -> Path:
+    from PyQt6.QtWidgets import QApplication
     from theme import apply_theme
     window = _editor_window()
     window._theme = apply_theme(mode)
     window._apply_workspace()
     window._on_tool_changed("arrow")
+    window._sidebar._header.hide()
+    window._sidebar._grid_host.hide()
+    theme = window._sidebar.findChild(type(window._sidebar._theme), "PresetTheme")
+    if theme is not None and theme.parentWidget() is not None:
+        theme.parentWidget().hide()
     window._options._shadow.setVisible(True)
     window._options._outline.setVisible(True)
     window._options._curve.setVisible(True)
-    _present(window, 1024, 680)
+    window._options._shadow.setChecked(True)
+    window._options._outline.setChecked(True)
+    _present(window, 1024, 780)
+    window._sidebar._scroll.ensureWidgetVisible(window._options._shadow)
+    QApplication.processEvents()
     try:
         return _grab(window._sidebar, path)
     finally:
@@ -668,6 +678,7 @@ def _reopened(path: Path) -> Path:
     previous = os.environ.get("LOCALAPPDATA")
     os.environ["LOCALAPPDATA"] = tempfile.mkdtemp()
     window = EditorWindow(Image.new("RGB", (200, 100), "#d7e6f5"))
+    again = None
     try:
         scene = window._scene
         one = RectItem(QRectF(70, 20, 30, 24), QColor("#e00000"), QColor(224, 0, 0, 80), 2)
@@ -689,6 +700,8 @@ def _reopened(path: Path) -> Path:
         _present(again, 1024, 680)
         return _grab(again, path)
     finally:
+        if again is not None:
+            again.close()
         if previous is None:
             os.environ.pop("LOCALAPPDATA", None)
         else:
