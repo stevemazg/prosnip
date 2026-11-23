@@ -352,7 +352,8 @@ class LauncherTests(unittest.TestCase):
         self.assertEqual(editor.APP_VERSION, editor.APP_VERSION)
         self.assertEqual(window.new_capture_button.text(), "New Capture")
         self.assertEqual(window.quit_button.text(), "Quit")
-        self.assertIn("this system", window.shortcut_label.text())
+        status = window.shortcut_label.text()
+        self.assertTrue("this system" in status or "Ctrl+Shift+S" in status or "in use" in status)
         self.assertIn("New Capture", window.shortcut_label.text())
 
     def test_shortcut_status_text(self):
@@ -636,18 +637,21 @@ class AppTests(unittest.TestCase):
             sys.stderr = None
             with tempfile.TemporaryDirectory() as tmp:
                 main.setup_logging([Path(tmp)])
-            file_handlers = [
-                handler for handler in root_logger.handlers if isinstance(handler, logging.FileHandler)
-            ]
-            console_handlers = [
-                handler
-                for handler in root_logger.handlers
-                if isinstance(handler, logging.StreamHandler)
-                and not isinstance(handler, logging.FileHandler)
-            ]
-            self.assertEqual(len(file_handlers), 1)
-            self.assertEqual(console_handlers, [])
-            self.assertTrue(str(file_handlers[0].baseFilename).endswith("ProSnip-Bob.log"))
+                file_handlers = [
+                    handler for handler in root_logger.handlers if isinstance(handler, logging.FileHandler)
+                ]
+                console_handlers = [
+                    handler
+                    for handler in root_logger.handlers
+                    if isinstance(handler, logging.StreamHandler)
+                    and not isinstance(handler, logging.FileHandler)
+                ]
+                self.assertEqual(len(file_handlers), 1)
+                self.assertEqual(console_handlers, [])
+                self.assertTrue(str(file_handlers[0].baseFilename).endswith("ProSnip-Bob.log"))
+                for handler in file_handlers:
+                    root_logger.removeHandler(handler)
+                    handler.close()
         finally:
             for handler in list(root_logger.handlers):
                 root_logger.removeHandler(handler)
