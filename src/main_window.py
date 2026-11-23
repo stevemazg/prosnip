@@ -19,7 +19,7 @@ from colour import ColourHistory
 
 from editor import APP_NAME, APP_VERSION
 from hotkey import TAKEN_MESSAGE
-from styles import DEFAULT_STYLE, with_tooltip_style
+from styles import with_tooltip_style
 
 
 def shortcut_status_text(reason: str | None) -> str:
@@ -58,32 +58,35 @@ class MainWindow(QMainWindow):
         self._build()
 
     def _build(self):
-        accent = DEFAULT_STYLE.pen_color.name()
+        from theme import colours_for
+
+        colours = colours_for("light")
+        accent = colours["accent"]
         self.setStyleSheet(with_tooltip_style(
             f"""
             QMainWindow, QWidget {{
-                background-color: #2b2b2b;
-                color: #f2f2f2;
+                background-color: {colours['window']};
+                color: {colours['text']};
                 font-size: 13px;
             }}
             QLabel#appName {{
                 font-size: 22px;
                 font-weight: 600;
-                color: #ffffff;
+                color: {colours['text']};
             }}
             QLabel#version, QLabel#shortcut {{
-                color: #c8c8c8;
+                color: {colours['muted']};
             }}
             QPushButton {{
-                background: #2d2d2d;
-                border: 1px solid #3d3d3d;
-                color: #eeeeee;
+                background: {colours['panel']};
+                border: 1px solid {colours['border']};
+                color: {colours['text']};
                 border-radius: 4px;
                 padding: 8px 14px;
                 min-height: 22px;
             }}
             QPushButton:hover {{
-                background: #3d3d3d;
+                border-color: {accent};
             }}
             QPushButton#newCapture {{
                 background: {accent};
@@ -92,7 +95,7 @@ class MainWindow(QMainWindow):
                 font-weight: 600;
             }}
             QPushButton#newCapture:hover {{
-                background: #c62f3b;
+                background: #312e81;
             }}
             """
         ))
@@ -211,9 +214,16 @@ class SettingsDialog(QDialog):
         self._auto = QCheckBox("Copy the snip to the clipboard after a capture")
         self._auto.setChecked(history.auto_copy)
         layout.addWidget(self._auto)
-        note = QLabel("Colour picker stays on Ctrl+Shift+P, in the editor toolbar and the tray menu.")
+        note = QLabel("Defaults stay Ctrl+Shift+S to capture and Ctrl+Shift+P for the colour picker. Change them here if you need to.")
         note.setWordWrap(True)
         layout.addWidget(note)
+        from PyQt6.QtWidgets import QLineEdit
+        self._capture_key = QLineEdit(history.capture_hotkey)
+        self._pick_key = QLineEdit(history.pick_hotkey)
+        layout.addWidget(QLabel("Capture hotkey"))
+        layout.addWidget(self._capture_key)
+        layout.addWidget(QLabel("Colour picker hotkey"))
+        layout.addWidget(self._pick_key)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(self._save)
         buttons.rejected.connect(self.reject)
@@ -221,4 +231,9 @@ class SettingsDialog(QDialog):
 
     def _save(self):
         self._history.set_auto_copy(self._auto.isChecked())
+        self._history.set_hotkeys(self._capture_key.text(), self._pick_key.text())
+        parent = self.parent()
+        callback = getattr(parent, "hotkeys_changed", None)
+        if callback is not None:
+            callback()
         self.accept()

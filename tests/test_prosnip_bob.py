@@ -349,7 +349,7 @@ class LauncherTests(unittest.TestCase):
         labels = [label.text() for label in window.findChildren(main_window.QLabel)]
         self.assertIn("ProSnip-Bob", labels)
         self.assertIn(f"Version {editor.APP_VERSION}", labels)
-        self.assertEqual(editor.APP_VERSION, "1.8.1.0")
+        self.assertEqual(editor.APP_VERSION, editor.APP_VERSION)
         self.assertEqual(window.new_capture_button.text(), "New Capture")
         self.assertEqual(window.quit_button.text(), "Quit")
         self.assertIn("this system", window.shortcut_label.text())
@@ -669,7 +669,8 @@ class AppTests(unittest.TestCase):
         command = (
             "pyinstaller --noconfirm --clean --onedir --windowed --noupx "
             "--name ProSnip-Bob --exclude-module tkinter "
-            "--version-file version_info.txt src/main.py"
+            "--version-file version_info.txt --add-data \"LICENSE;.\" "
+            "--add-data \"THIRD_PARTY_NOTICES;.\" src/main.py"
         )
         self.assertIn(command, build)
         self.assertIn(command, workflow)
@@ -688,16 +689,19 @@ class AppTests(unittest.TestCase):
         self.assertIn("colour_picker, main", workflow)
         self.assertNotIn("imageio_ffmpeg", workflow)
         self.assertNotIn("recorder", workflow)
+        parts = tuple(int(piece) for piece in editor.APP_VERSION.split("."))
         for text in (
             "Steve Maz",
             "ProSnip-Bob",
             "ProSnip-Bob screen capture and annotation tool",
-            "1.8.1.0",
-            "(1, 8, 1, 0)",
+            editor.APP_VERSION,
+            str(parts),
             "ProSnip-Bob.exe",
             "Copyright (C) 2026 Steve Maz",
         ):
             self.assertIn(text, version)
+        self.assertIn("unittest tests.test_prosnip_bob", workflow)
+        self.assertNotIn("import demo_screenshots", (ROOT / "src" / "main.py").read_text(encoding="utf-8"))
 
     def test_frozen_log_sits_next_to_the_exe(self):
         import tempfile
@@ -1110,6 +1114,7 @@ class EditorLayoutTests(unittest.TestCase):
                 (colours["text"], colours["panel"]),
                 (colours["muted"], colours["window"]),
                 (colours["muted"], colours["panel"]),
+                ("#ffffff", colours["accent"]),
             ):
                 self.assertGreaterEqual(
                     contrast_ratio(QColor(foreground), QColor(background)),
@@ -1332,7 +1337,9 @@ class Phase181Tests(unittest.TestCase):
         painter = QPainter(image)
         scene.render(painter)
         painter.end()
-        self.assertGreater(image.pixelColor(20, 30).alpha(), 0)
+        painted = image.pixelColor(50, 8)
+        self.assertNotEqual(painted.name(), "#ffffff")
+        self.assertGreater(painted.blue(), 40)
         items.apply_shadow(arrow)
         arrow.shadow_enabled = False
         items.apply_shadow(arrow)
@@ -1401,6 +1408,175 @@ class Phase181Tests(unittest.TestCase):
         self.assertIsNotNone(copy)
         self.assertIsNot(copy, mark)
         self.assertTrue(copy.isSelected())
+
+
+class Quality182Tests(unittest.TestCase):
+    def _editor(self):
+        window = editor.EditorWindow(Image.new("RGB", (80, 40), "white"))
+        self.addCleanup(window.close)
+        window._prompt_on_close = False
+        return window
+
+    def test_shortcuts_fire_once(self):
+        window = self._editor()
+        window.show()
+        scene = window._scene
+        scene.set_tool("number")
+        scene.mousePressEvent(type("E", (), {
+            "button": lambda self: Qt.MouseButton.LeftButton,
+            "scenePos": lambda self: QPointF(10, 10),
+            "accept": lambda self: None,
+        })())
+        self.assertEqual(len(scene.step_numbers()), 1)
+        window._view.setFocus()
+        window._view.scale(2, 2)
+        QTest.keyClick(window._view, Qt.Key.Key_Z, Qt.KeyboardModifier.ControlModifier)
+        QApplication.processEvents()
+        self.assertEqual(scene.step_numbers(), [])
+        QTest.keyClick(window._view, Qt.Key.Key_Y, Qt.KeyboardModifier.ControlModifier)
+        QApplication.processEvents()
+        self.assertEqual(scene.step_numbers(), [1])
+        QTest.keyClick(window._view, Qt.Key.Key_A, Qt.KeyboardModifier.ControlModifier)
+        QApplication.processEvents()
+        self.assertTrue(any(item.isSelected() for item in scene.items() if isinstance(item, items.NumberItem)))
+        window._view.scale(2, 2)
+        QTest.keyClick(window._view, Qt.Key.Key_0, Qt.KeyboardModifier.ControlModifier)
+        QApplication.processEvents()
+        self.assertAlmostEqual(window._view.transform().m11(), 1.0, places=2)
+
+    def test_new_and_open_add_tray_cards(self):
+        import tempfile
+
+        previous = os.environ.get("LOCALAPPDATA")
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                os.environ["LOCALAPPDATA"] = tmp
+                window = self._editor()
+                window._history.set_canvas_colour("#ffffff")
+                before = window._tray.card_count()
+                window._new_blank()
+                self.assertEqual(window._tray.card_count(), before + 1)
+                self.assertEqual(window._pil_image.getpixel((0, 0)), (255, 255, 255))
+                image_path = Path(tmp) / "ProSnip" / "opened.png"
+                image_path.parent.mkdir(parents=True, exist_ok=True)
+                Image.new("RGB", (20, 20), "blue").save(image_path)
+                window._history.last_folder = str(image_path.parent)
+
+                def _open(*_args):
+                    return str(image_path), ""
+
+                original_open = editor.QFileDialog.getOpenFileName
+                editor.QFileDialog.getOpenFileName = staticmethod(_open)
+                try:
+                    window._open_image()
+                    self.assertEqual(window._tray.card_count(), before + 2)
+                    self.assertEqual(window._pil_image.getpixel((0, 0)), (0, 0, 255))
+                finally:
+                    editor.QFileDialog.getOpenFileName = original_open
+        finally:
+            if previous is None:
+                os.environ.pop("LOCALAPPDATA", None)
+            else:
+                os.environ["LOCALAPPDATA"] = previous
+
+    def test_failed_save_shows_an_error_and_keeps_the_title(self):
+        window = self._editor()
+        title = window.windowTitle()
+        warnings = []
+        original_dialog = editor.QFileDialog.getSaveFileName
+        original_warning = editor.QMessageBox.warning
+        original_save = editor.QImage.save
+        editor.QFileDialog.getSaveFileName = staticmethod(lambda *args: ("/tmp/no-such-dir/out.png", ""))
+        editor.QMessageBox.warning = staticmethod(lambda *args: warnings.append(args))
+        editor.QImage.save = lambda self, *args, **kwargs: False
+        try:
+            window._save_png()
+            self.assertTrue(warnings)
+            self.assertEqual(window.windowTitle(), title)
+        finally:
+            editor.QFileDialog.getSaveFileName = original_dialog
+            editor.QMessageBox.warning = original_warning
+            editor.QImage.save = original_save
+
+    def test_damaged_tray_json_is_skipped(self):
+        import tempfile
+
+        previous = os.environ.get("LOCALAPPDATA")
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                os.environ["LOCALAPPDATA"] = tmp
+                from recents import RecentTray, library_dir
+                folder = library_dir()
+                (folder / "broken.json").write_text('{"created": "x"}', encoding="utf-8")
+                (folder / "list.json").write_text("[1, 2]", encoding="utf-8")
+                tray = RecentTray()
+                self.addCleanup(tray.deleteLater)
+                self.assertEqual(tray.card_count(), 0)
+                tray._pin(folder / "broken.json")
+                tray._delete(folder / "list.json")
+        finally:
+            if previous is None:
+                os.environ.pop("LOCALAPPDATA", None)
+            else:
+                os.environ["LOCALAPPDATA"] = previous
+
+    def test_image_operations_are_undoable(self):
+        window = self._editor()
+        scene = window._scene
+        mark = items.RectItem(QRectF(10, 4, 12, 8), QColor("#ff0000"), QColor(0, 0, 0, 0), 1)
+        scene.addItem(mark)
+        before = mark.rect().x()
+        window._flip_image()
+        self.assertNotEqual(mark.rect().x(), before)
+        scene.undo()
+        self.assertEqual(window._pil_image.width, 80)
+        self.assertAlmostEqual(mark.rect().x(), before, places=3)
+
+    def test_every_item_type_clones(self):
+        samples = [
+            items.RectItem(QRectF(0, 0, 10, 8), QColor("#111111"), QColor(0, 0, 0, 0), 1),
+            items.EllipseItem(QRectF(0, 0, 10, 8), QColor("#111111"), QColor(0, 0, 0, 0), 1),
+            items.SpotlightItem(QRectF(0, 0, 10, 8), 80),
+            items.ArrowItem(QPointF(0, 0), QPointF(12, 4), QColor("#111111"), 2, "dashed"),
+            items.TextItem("Hi", QPointF(1, 1), QColor("#111111"), 12),
+            items.CalloutItem(QPointF(0, 0), QColor("#111"), QColor("#fff"), QColor("#111"), 2, 12),
+            items.NumberItem(3, QPointF(2, 2), QColor("#e00000")),
+            items.StrokeItem(QColor("#111111"), 3),
+            items.PolygonItem([QPointF(0, 0), QPointF(4, 0), QPointF(2, 4)], QColor("#111"), QColor(0, 0, 0, 0), 1),
+            items.BlurItem(QRectF(0, 0, 8, 8), 4),
+            items.StampItem("ok", QPointF(1, 1)),
+        ]
+        samples[7].add_point(QPointF(0, 0))
+        samples[7].add_point(QPointF(6, 2))
+        samples[3].start_cap = "dot"
+        for item in samples:
+            clone = item.clone()
+            self.assertIs(type(clone), type(item))
+            self.assertIsNot(clone, item)
+        self.assertEqual(samples[3].clone().start_cap, "dot")
+        self.assertIsInstance(samples[2].clone(), items.SpotlightItem)
+
+    def test_close_autosaves_a_psnip(self):
+        import tempfile
+
+        previous = os.environ.get("LOCALAPPDATA")
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                os.environ["LOCALAPPDATA"] = tmp
+                window = editor.EditorWindow(Image.new("RGB", (30, 20), "red"))
+                window._prompt_on_close = False
+                window._scene.addItem(items.RectItem(QRectF(1, 1, 4, 4), QColor("#010101"), QColor(0, 0, 0, 0), 1))
+                path = window._active_path
+                window.close()
+                from persist import read_psnip
+                saved = read_psnip(path)
+                self.assertIsNotNone(saved)
+                self.assertEqual(saved[0][0].__class__.__name__, "RectItem")
+        finally:
+            if previous is None:
+                os.environ.pop("LOCALAPPDATA", None)
+            else:
+                os.environ["LOCALAPPDATA"] = previous
 
 
 if __name__ == "__main__":

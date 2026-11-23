@@ -20,12 +20,13 @@ from options import ToolOptions
 from recents import RecentTray
 from sidebar import SideBar
 from swatches import SwatchBook
-from theme import apply_theme, colours_for, resolved_mode
-from toolbar import ToolBar
-
+from theme import apply_theme, colours_for
 import io
 import logging
 import math
+import os
+import subprocess
+import sys
 from datetime import datetime
 from pathlib import Path
 from PIL import Image, ImageOps
@@ -33,7 +34,7 @@ from PIL import Image, ImageOps
 log = logging.getLogger("prosnip")
 
 APP_NAME = "ProSnip-Bob"
-APP_VERSION = "1.8.1.0"
+APP_VERSION = "1.8.2.0"
 
 
 def clamp_crop_rect(rect: QRectF, width: int, height: int) -> QRect | None:
@@ -138,6 +139,7 @@ class ResizeDialog(QDialog):
 class EditorWindow(QMainWindow):
     screen_pick_requested = pyqtSignal()
     new_capture_requested = pyqtSignal()
+    preferences_changed = pyqtSignal()
 
     def __init__(self, pil_image: Image.Image, parent=None):
         super().__init__(parent)
@@ -151,9 +153,14 @@ class EditorWindow(QMainWindow):
         self._placing_tools = False
         self._documents = {}
         self._active_path = None
+        self._dirty = False
+        self._temp_files = []
+        self._prompt_on_close = (
+            os.environ.get("PROSNIP_AUTOCLOSE") != "1"
+            and os.environ.get("QT_QPA_PLATFORM") != "offscreen"
+        )
         self._scene = ProSnipScene()
         self._view = ProSnipView(self._scene)
-        self._toolbar = ToolBar()
 
         self._history = ColourHistory()
         self._swatches = SwatchBook(self._history.path)
@@ -198,7 +205,7 @@ class EditorWindow(QMainWindow):
     def _setup_ui(self):
         self._build_menus()
         self._options = ToolOptions(self._history, self._swatches)
-        self._options.bind(self._scene, self._toolbar)
+        self._options.bind(self._scene, None)
         self._bar = EditorBar(self._history)
         self._bar.setObjectName("EditorToolbar")
         self._sidebar = SideBar(self._options, self._history)
@@ -235,6 +242,9 @@ class EditorWindow(QMainWindow):
         self._tray.setVisible(self._history.tray_visible)
         self._wire_shell()
         self._apply_workspace()
+        from recents import purge_expired
+        purge_expired(self._history.retention_days)
+        self._apply_canvas_colour(self._history.canvas_colour)
         self._remember_capture()
 
     def _build_footer(self):
@@ -281,8 +291,8 @@ class EditorWindow(QMainWindow):
         self._bar.editor_requested.connect(lambda: self._show_library(False))
         self._bar.copy_all_requested.connect(self._copy_all)
         self._bar.save_requested.connect(self._save_action)
-        self._bar.favourites_requested.connect(lambda: self._sidebar.show_favourites(True))
-        self._sidebar.preset_chosen.connect(self._options.set_border_colour)
+        self._bar.favourites_requested.connect(self._toggle_favourites)
+        self._sidebar.style_chosen.connect(self._apply_preset)
         self._sidebar.select_all_requested.connect(self._select_tool_objects)
         self._tray.opened.connect(self._open_recent)
         self._view.cursor_moved.connect(self._on_cursor)
@@ -327,24 +337,39 @@ class EditorWindow(QMainWindow):
         import tempfile
         import webbrowser
         path = Path(tempfile.gettempdir()) / "ProSnip-Bob-share.png"
-        self._render_scene().save(str(path), "PNG")
+        if not self._render_scene().save(str(path), "PNG"):
+            log.error("Could not write the email picture")
+            QMessageBox.warning(self, "Email", "Could not prepare the picture for email.")
+            return
+        self._temp_files.append(path)
         webbrowser.open("mailto:?subject=ProSnip-Bob%20capture")
+        if sys.platform == "win32":
+            subprocess.run(["explorer", "/select,", str(path)], check=False)
+
+    def _toggle_favourites(self):
+        enabled = not self._sidebar._show_favourites
+        self._sidebar.show_favourites(enabled)
+
+    def _apply_preset(self, colour: QColor, width: int, dashed: bool):
+        self._options.apply_preset(colour, int(width), bool(dashed))
+        self._dirty = True
 
     def _new_blank(self):
-        image = Image.new("RGB", (960, 540), "#ffffff")
-        self._replace_pixmap(pil_to_qpixmap(image), image)
+        colour = self._history.canvas_colour
+        fill = "#ffffff" if not colour or colour == "transparent" else colour
+        self.receive_capture(Image.new("RGB", (960, 540), fill), "New image")
 
     def _paste_image(self):
+        from capture import qpixmap_to_pil
+
         clipboard = QApplication.clipboard()
         if clipboard is None:
             return
         image = clipboard.image()
         if image.isNull():
+            QMessageBox.warning(self, "Clipboard", "The clipboard does not contain an image.")
             return
-        pixmap = QPixmap.fromImage(image)
-        self._replace_pixmap(pixmap, Image.frombytes("RGB", (image.width(), image.height()), bytes(image.bits().asstring(image.sizeInBytes()))) if False else self._pil_image)
-        self._bg_item.setPixmap(pixmap)
-        self._scene.setSceneRect(QRectF(pixmap.rect()))
+        self.receive_capture(qpixmap_to_pil(QPixmap.fromImage(image)), "Clipboard")
 
     def _open_recent(self, path: str):
         """Show a tray capture in this same window, restoring its annotations."""
@@ -371,7 +396,15 @@ class EditorWindow(QMainWindow):
             self._replace_pixmap(pil_to_qpixmap(image), image)
             self._scene._undo_stack.clear()
             self._scene._redo_stack.clear()
-            self._scene.sync_next_number()
+            from persist import read_psnip
+            saved = read_psnip(path)
+            if saved is not None:
+                items, nxt = saved
+                for item in items:
+                    self._scene.addItem(item)
+                self._scene.set_next_number(nxt)
+            else:
+                self._scene.sync_next_number()
         self._tray.mark_selected(path)
         self._show_library(False)
         self.raise_()
@@ -397,8 +430,10 @@ class EditorWindow(QMainWindow):
         self._scene._redo_stack.clear()
         self._scene.sync_next_number()
         self._filename = None
+        self._dirty = False
         self.setWindowTitle(f"{APP_NAME} — Untitled")
         self._remember_capture(title)
+        self._tray.set_unsaved(self._active_path, True)
         self._show_library(False)
         if self.isMinimized():
             self.showNormal()
@@ -411,13 +446,15 @@ class EditorWindow(QMainWindow):
         if not path:
             self._detach_annotations()
             return
+        annotations = self._detach_annotations()
         self._documents[path] = {
             "image": self._pil_image.copy(),
-            "annotations": self._detach_annotations(),
+            "annotations": annotations,
             "undo": list(self._scene._undo_stack),
             "redo": list(self._scene._redo_stack),
             "next": self._scene._next_number,
         }
+        self._write_document(path, annotations)
         self._scene._undo_stack.clear()
         self._scene._redo_stack.clear()
 
@@ -478,9 +515,6 @@ class EditorWindow(QMainWindow):
         self._btn_save_png = file_menu.addAction("Save PNG", self._save_png)
         self._btn_save_png.setToolTip("Save PNG (Ctrl+S)")
         file_menu.addAction("Save As JPG", self._save_jpg)
-        self._btn_copy = file_menu.addAction("Copy", self._copy_clipboard)
-        self._btn_copy.setText("Copy")
-        self._btn_copy.setToolTip("Copy (Ctrl+C)")
         file_menu.addAction("Export…", self._save_png)
         file_menu.addSeparator()
         file_menu.addAction("Preferences…", self._preferences)
@@ -489,15 +523,23 @@ class EditorWindow(QMainWindow):
 
         edit = bar.addMenu("Edit")
         undo = edit.addAction("Undo")
-        undo.setShortcut(QKeySequence.StandardKey.Undo)
+        undo.setShortcut(QKeySequence("Ctrl+Z"))
         undo.triggered.connect(self._scene.undo)
         redo = edit.addAction("Redo")
-        redo.setShortcut(QKeySequence.StandardKey.Redo)
+        redo.setShortcut(QKeySequence("Ctrl+Y"))
         redo.triggered.connect(self._scene.redo)
         edit.addSeparator()
         edit.addAction("Cut", self._cut)
-        edit.addAction("Copy", self._copy_clipboard)
-        edit.addAction("Paste", self._scene.paste_clipboard)
+        self._btn_copy = edit.addAction("Copy", self._copy_clipboard)
+        self._btn_copy.setText("Copy")
+        self._btn_copy.setShortcut(QKeySequence("Ctrl+C"))
+        self._btn_copy.setToolTip("Copy (Ctrl+C)")
+        copy_all = edit.addAction("Copy all", self._copy_all)
+        copy_all.setShortcut(QKeySequence("Ctrl+Shift+C"))
+        paste = edit.addAction("Paste", self._scene.paste_clipboard)
+        paste.setShortcut(QKeySequence("Ctrl+V"))
+        duplicate = edit.addAction("Duplicate", self._scene.duplicate_selected)
+        duplicate.setShortcut(QKeySequence("Ctrl+D"))
         select_all = edit.addAction("Select all")
         select_all.setShortcut(QKeySequence("Ctrl+A"))
         select_all.triggered.connect(self._select_all)
@@ -518,9 +560,14 @@ class EditorWindow(QMainWindow):
         arrange.addAction("Bring to front", self._scene.bring_to_front)
         arrange.addAction("Send to back", self._scene.send_to_back)
         arrange.addSeparator()
-        arrange.addAction("Group", self._scene.group_selected)
-        arrange.addAction("Ungroup", self._scene.ungroup_selected)
-        arrange.addAction("Flatten", self._scene.flatten_selected)
+        group = arrange.addAction("Group", self._scene.group_selected)
+        group.setShortcut(QKeySequence("Ctrl+Shift+G"))
+        ungroup = arrange.addAction("Ungroup", self._scene.ungroup_selected)
+        ungroup.setShortcut(QKeySequence("Ctrl+Shift+U"))
+        flatten = arrange.addAction("Flatten", lambda: self._scene.flatten_selected(True))
+        flatten.setShortcut(QKeySequence("Ctrl+T"))
+        flatten_all = arrange.addAction("Flatten all", self._scene.flatten_all)
+        flatten_all.setShortcut(QKeySequence("Ctrl+Shift+T"))
         arrange.addAction("Lock item", self._scene.toggle_lock)
         arrange.addAction("Renumber steps", self._scene.renumber_steps)
         self._arrange_menu = arrange
@@ -532,11 +579,12 @@ class EditorWindow(QMainWindow):
         view.addAction("Zoom in", lambda: self._view.scale(1.15, 1.15))
         view.addAction("Zoom out", lambda: self._view.scale(1 / 1.15, 1 / 1.15))
         fit = view.addAction("Fit")
-        fit.setShortcut(QKeySequence("Ctrl+0"))
+        fit.setShortcut(QKeySequence("Ctrl+9"))
         fit.triggered.connect(self._view.fit_scene)
-        actual = view.addAction("100%")
-        actual.setShortcut(QKeySequence("Ctrl+1"))
-        actual.triggered.connect(self._view.resetTransform)
+        actual = view.addAction("Actual size")
+        actual.setShortcut(QKeySequence("Ctrl+0"))
+        actual.triggered.connect(self._actual_size)
+        self._btn_save_png.setShortcut(QKeySequence("Ctrl+S"))
         self._view_menu = view
 
         help_menu = bar.addMenu("Help")
@@ -571,6 +619,21 @@ class EditorWindow(QMainWindow):
         theme.setCurrentText(current)
         layout.addWidget(QLabel("Appearance"))
         layout.addWidget(theme)
+        capture_key = QLineEdit(self._history.capture_hotkey)
+        pick_key = QLineEdit(self._history.pick_hotkey)
+        layout.addWidget(QLabel("Capture hotkey"))
+        layout.addWidget(capture_key)
+        layout.addWidget(QLabel("Colour picker hotkey"))
+        layout.addWidget(pick_key)
+        retention = QSpinBox()
+        retention.setRange(0, 3650)
+        retention.setValue(int(self._history.retention_days))
+        retention.setSuffix(" days (0 keeps everything)")
+        layout.addWidget(QLabel("Keep captures for"))
+        layout.addWidget(retention)
+        confirm = QCheckBox("Ask before closing the editor")
+        confirm.setChecked(self._history.confirm_close)
+        layout.addWidget(confirm)
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
@@ -583,6 +646,11 @@ class EditorWindow(QMainWindow):
             self._history.set_theme(chosen)
             self._theme = apply_theme(chosen)
             self._apply_workspace()
+            self._history.set_hotkeys(capture_key.text(), pick_key.text())
+            self._history.set_retention(retention.value())
+            self._history.set_confirm_close(confirm.isChecked())
+            self._prompt_on_close = bool(confirm.isChecked()) and os.environ.get("QT_QPA_PLATFORM") != "offscreen"
+            self.preferences_changed.emit()
 
     def _select_all(self):
         focus = QApplication.focusWidget()
@@ -613,7 +681,7 @@ class EditorWindow(QMainWindow):
         if not path:
             return
         image = Image.open(path).convert("RGB")
-        self._replace_pixmap(pil_to_qpixmap(image), image)
+        self.receive_capture(image, Path(path).stem)
         self._history.set_last_folder(str(Path(path).parent))
 
     def _about(self):
@@ -636,12 +704,97 @@ class EditorWindow(QMainWindow):
         self._history.set_panels(visible, self._tray.isVisible())
 
     def _canvas_colour(self):
-        from PyQt6.QtWidgets import QColorDialog
-        from PyQt6.QtGui import QBrush
-        colour = QColorDialog.getColor(QColor("#f4f5f6"), self, "Canvas colour")
-        if not colour.isValid():
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Canvas colour")
+        layout = QVBoxLayout(dialog)
+        transparent = QPushButton("Transparent")
+        choose = QPushButton("Choose colour…")
+        layout.addWidget(transparent)
+        layout.addWidget(choose)
+        chosen = {"value": None}
+
+        def use_transparent():
+            chosen["value"] = "transparent"
+            dialog.accept()
+
+        def use_colour():
+            from PyQt6.QtWidgets import QColorDialog
+            colour = QColorDialog.getColor(QColor("#f4f5f6"), dialog, "Canvas colour")
+            if colour.isValid():
+                chosen["value"] = colour.name()
+                dialog.accept()
+
+        transparent.clicked.connect(use_transparent)
+        choose.clicked.connect(use_colour)
+        if dialog.exec() != QDialog.DialogCode.Accepted or not chosen["value"]:
             return
-        self._view.setBackgroundBrush(QBrush(colour))
+        self._history.set_canvas_colour(chosen["value"])
+        self._apply_canvas_colour(chosen["value"])
+
+    def _apply_canvas_colour(self, value: str):
+        from PyQt6.QtGui import QBrush
+
+        if value == "transparent":
+            self._view.setBackgroundBrush(QBrush(Qt.BrushStyle.NoBrush))
+            return
+        self._view.setBackgroundBrush(QBrush(QColor(value)))
+
+    def closeEvent(self, event):
+        if self._prompt_on_close and self._has_unsaved_work():
+            box = self._close_box()
+            box.exec()
+            if box.clickedButton() is box.button(QMessageBox.StandardButton.Cancel):
+                event.ignore()
+                return
+            if box.clickedButton() is box.button(QMessageBox.StandardButton.Save):
+                self.autosave_active()
+        else:
+            self.autosave_active()
+        self._release_documents()
+        for path in self._temp_files:
+            try:
+                Path(path).unlink(missing_ok=True)
+            except OSError:
+                log.exception("Could not remove %s", path)
+        super().closeEvent(event)
+
+    def _close_box(self) -> QMessageBox:
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setWindowTitle(APP_NAME)
+        box.setText("Save annotations before closing?")
+        box.setStandardButtons(
+            QMessageBox.StandardButton.Save
+            | QMessageBox.StandardButton.Discard
+            | QMessageBox.StandardButton.Cancel
+        )
+        return box
+
+    def _has_unsaved_work(self) -> bool:
+        return bool(self._scene._annotations()) or bool(self._scene._undo_stack) or self._dirty
+
+    def autosave_active(self):
+        if self._active_path:
+            self._write_document(self._active_path, self._scene._annotations())
+
+    def _write_document(self, path: str, annotations=None):
+        from persist import write_psnip
+
+        if not path:
+            return
+        rows = self._scene._annotations() if annotations is None else annotations
+        try:
+            write_psnip(path, rows, self._scene._next_number)
+        except OSError:
+            log.exception("Could not autosave %s", path)
+
+    def _release_documents(self):
+        self._documents.clear()
+
+    def show_close_prompt(self) -> QMessageBox:
+        box = self._close_box()
+        box.show()
+        return box
 
     def assert_tools_left_of_canvas(self) -> None:
         """Kept name for older checks. The tools now live on the top toolbar."""
@@ -649,7 +802,7 @@ class EditorWindow(QMainWindow):
 
     def assert_compact_layout(self) -> None:
         """Toolbar on top, sidebar on the right, tray at the bottom, no docks."""
-        from PyQt6.QtWidgets import QAbstractButton, QDockWidget, QToolButton
+        from PyQt6.QtWidgets import QDockWidget, QToolButton
 
         problems = []
         if self.findChildren(QDockWidget):
@@ -663,9 +816,9 @@ class EditorWindow(QMainWindow):
         if self._tray.isVisible() and self._tray.height() > 130:
             problems.append(f"tray is {self._tray.height()}px")
         names = []
-        for widget in self.findChildren(QWidget):
+        for widget in self._options.findChildren(QWidget):
             name = widget.objectName()
-            if name in {"BorderSwatch", "FillSwatch", "WidthSpin", "FillOpacitySpin", "OpacitySpin"}:
+            if name and not name.startswith("qt_"):
                 names.append(name)
         duplicates = {name for name in names if names.count(name) > 1}
         if duplicates:
@@ -725,27 +878,17 @@ class EditorWindow(QMainWindow):
             raise RuntimeError("Editor layout failed: " + "; ".join(problems))
 
     def _connect_signals(self):
-        self._toolbar.tool_changed.connect(self._on_tool_changed)
-        self._toolbar.pen_color_changed.connect(self._scene.set_pen_color)
-        self._scene.colour_picked.connect(self._toolbar.set_pen_colour)
-        self._toolbar.stamp_chosen.connect(self._scene.set_last_stamp)
         self._scene.crop_requested.connect(self._on_crop_requested)
-        self._toolbar.screen_pick_requested.connect(self.screen_pick_requested.emit)
         self._options.screen_pick_requested.connect(self.screen_pick_requested.emit)
         self._scene.selectionChanged.connect(self._refresh_status_tool)
         self._scene.image_changed.connect(self._on_image_changed)
 
+    def _actual_size(self):
+        self._view.resetTransform()
+        if getattr(self, "_footer_zoom", None) is not None:
+            self._footer_zoom.setText("100%")
+
     def _setup_shortcuts(self):
-        QShortcut(QKeySequence("Ctrl+S"), self).activated.connect(self._save_png)
-        QShortcut(QKeySequence("Ctrl+C"), self).activated.connect(self._copy_clipboard)
-        QShortcut(QKeySequence("Ctrl+Shift+C"), self).activated.connect(self._copy_clipboard)
-        QShortcut(QKeySequence("Ctrl+V"), self).activated.connect(self._scene.paste_clipboard)
-        QShortcut(QKeySequence("Ctrl+D"), self).activated.connect(self._scene.duplicate_selected)
-        QShortcut(QKeySequence("Ctrl+Z"), self).activated.connect(self._scene.undo)
-        QShortcut(QKeySequence("Ctrl+Y"), self).activated.connect(self._scene.redo)
-        QShortcut(QKeySequence("Ctrl+0"), self).activated.connect(self._view.fit_scene)
-        QShortcut(QKeySequence("Ctrl+1"), self).activated.connect(self._view.resetTransform)
-        QShortcut(QKeySequence("Ctrl+A"), self).activated.connect(self._select_all)
         for key, tool in (
             ("V", "select"),
             ("A", "arrow"),
@@ -798,11 +941,7 @@ class EditorWindow(QMainWindow):
         self._refresh_status_tool()
 
     def _on_tool_changed(self, tool: str):
-        if tool == "fill":
-            self._sidebar.set_tool_name("Fill", 0)
-            return
         self._scene.set_tool(tool)
-        self._toolbar.set_tool(tool)
         if getattr(self, "_bar", None) is not None:
             self._bar.set_tool(tool)
         self._options.refresh()
@@ -857,9 +996,7 @@ class EditorWindow(QMainWindow):
             "PNG Images (*.png)"
         )
         if path:
-            img = self._render_scene()
-            img.save(path, "PNG")
-            self._remember_save(path)
+            self._write_saved_image(path, "PNG")
 
     def _save_jpg(self):
         path, _ = QFileDialog.getSaveFileName(
@@ -867,9 +1004,21 @@ class EditorWindow(QMainWindow):
             "JPEG Images (*.jpg *.jpeg)"
         )
         if path:
-            img = self._render_scene()
-            img.save(path, "JPEG", 95)
-            self._remember_save(path)
+            self._write_saved_image(path, "JPEG", 95)
+
+    def _write_saved_image(self, path: str, fmt: str, quality: int | None = None) -> bool:
+        image = self._render_scene()
+        ok = image.save(path, fmt, quality) if quality is not None else image.save(path, fmt)
+        if not ok:
+            log.error("Could not save %s", path)
+            QMessageBox.warning(self, "Save failed", f"Could not save the picture to\n{path}")
+            return False
+        self._remember_save(path)
+        self._dirty = False
+        if self._active_path:
+            self._tray.set_unsaved(self._active_path, False)
+            self.autosave_active()
+        return True
 
     def _copy_clipboard(self):
         selected = [item for item in self._scene.selectedItems() if item.parentItem() is None]
@@ -889,17 +1038,25 @@ class EditorWindow(QMainWindow):
         self._pil_image = image
         self._scene.update()
 
+    def _commit_pil(self, image: Image.Image, point_fn) -> None:
+        if not self._scene.edit_background(pil_to_qpixmap(image), point_fn):
+            return
+        self._pil_image = image
+        self._dirty = True
+
     def _rotate_image(self):
         if self._bg_item is None:
             return
+        width = self._pil_image.width
         turned = self._pil_image.transpose(Image.Transpose.ROTATE_90)
-        self._replace_pixmap(pil_to_qpixmap(turned), turned)
+        self._commit_pil(turned, lambda point: QPointF(point.y(), width - point.x()))
 
     def _flip_image(self):
         if self._bg_item is None:
             return
+        width = self._pil_image.width
         flipped = ImageOps.mirror(self._pil_image)
-        self._replace_pixmap(pil_to_qpixmap(flipped), flipped)
+        self._commit_pil(flipped, lambda point: QPointF(width - point.x(), point.y()))
 
     def _add_border(self):
         if self._bg_item is None:
@@ -909,7 +1066,7 @@ class EditorWindow(QMainWindow):
         shade = Image.new("RGBA", bordered.size, (0, 0, 0, 90))
         shadowed.paste(shade, (10, 10), shade)
         shadowed.paste(bordered, (0, 0), bordered)
-        self._replace_pixmap(pil_to_qpixmap(shadowed.convert("RGB")), shadowed.convert("RGB"))
+        self._commit_pil(shadowed.convert("RGB"), lambda point: QPointF(point.x() + 12, point.y() + 12))
 
     def _resize_image(self):
         if self._bg_item is None:
@@ -918,15 +1075,13 @@ class EditorWindow(QMainWindow):
         dlg = ResizeDialog(px.width(), px.height(), self)
         if dlg.exec() == QDialog.DialogCode.Accepted:
             new_w, new_h = dlg.get_size()
-            scaled = px.scaled(
-                new_w, new_h,
-                Qt.AspectRatioMode.IgnoreAspectRatio,
-                Qt.TransformationMode.SmoothTransformation
+            old_w = max(1, px.width())
+            old_h = max(1, px.height())
+            scaled = self._pil_image.resize((new_w, new_h), Image.LANCZOS)
+            self._commit_pil(
+                scaled,
+                lambda point, sx=new_w / old_w, sy=new_h / old_h: QPointF(point.x() * sx, point.y() * sy),
             )
-            self._bg_item.setPixmap(scaled)
-            self._scene.setSceneRect(QRectF(0, 0, new_w, new_h))
-            # Update internal PIL image
-            self._pil_image = self._pil_image.resize((new_w, new_h), Image.LANCZOS)
 
     def _on_crop_requested(self, rect: QRectF):
         if self._bg_item is None:
@@ -938,16 +1093,8 @@ class EditorWindow(QMainWindow):
         cropped_px = px.copy(crop)
         if cropped_px.isNull():
             return
-        self._bg_item.setPixmap(cropped_px)
-        self._bg_item.setPos(0, 0)
-        self._scene.setSceneRect(QRectF(0, 0, crop.width(), crop.height()))
-        # Child handles live in their parent's coordinates. Moving them as
-        # well as the parent shifts them twice.
-        for item in self._scene.items():
-            if item is self._bg_item or item.parentItem() is not None:
-                continue
-            item.moveBy(-float(crop.left()), -float(crop.top()))
-        self._pil_image = _crop_pil(self._pil_image, crop)
+        left, top = float(crop.left()), float(crop.top())
+        self._commit_pil(_crop_pil(self._pil_image, crop), lambda point: QPointF(point.x() - left, point.y() - top))
 
     def _on_image_changed(self):
         from capture import qpixmap_to_pil

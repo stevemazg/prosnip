@@ -9,11 +9,13 @@ import sys
 from pathlib import Path
 
 from PIL import Image, ImageDraw
-from PyQt6.QtCore import QPoint, QPointF, QRect, QRectF, Qt
-from PyQt6.QtGui import QBrush, QColor, QGuiApplication, QPen
+from PyQt6.QtCore import QPoint, QPointF, QRectF, Qt
+from PyQt6.QtGui import QBrush, QColor, QGuiApplication
 from PyQt6.QtWidgets import QApplication
 
 log = logging.getLogger("prosnip.demo")
+import os
+os.environ["PROSNIP_AUTOCLOSE"] = "1"
 # Screenshot grabs follow the editor shell: toolbar, sidebar, tray.
 
 
@@ -94,6 +96,9 @@ def capture_demo_screenshots(folder: Path) -> int:
         saved.append(_canvas_demo(folder / "38-canvas-demo.png"))
         saved.append(_new_tools(folder / "42-new-tools.png"))
         saved.append(_three_captures(folder / "43-three-captures.png"))
+        saved.append(_close_prompt(folder / "44-close-prompt.png"))
+        saved.append(_four_captures(folder / "45-four-captures.png"))
+        saved.append(_editor_theme(folder / "46-dark-accent.png", 1024, 680, "dark"))
         _assert_sizes()
         editor.close()
     except Exception:
@@ -567,6 +572,47 @@ def _three_captures(path: Path) -> Path:
         window.assert_compact_layout()
         return _grab(window, path)
     finally:
+        window.close()
+        if previous is None:
+            os.environ.pop("LOCALAPPDATA", None)
+        else:
+            os.environ["LOCALAPPDATA"] = previous
+
+
+def _close_prompt(path: Path) -> Path:
+    from PyQt6.QtCore import QTimer
+    from editor import EditorWindow
+    from items import RectItem
+
+    window = EditorWindow(Image.new("RGB", (640, 360), "#d7e6f5"))
+    window._prompt_on_close = True
+    window._scene.addItem(RectItem(QRectF(20, 20, 80, 40), QColor("#e00000"), QColor(224, 0, 0, 60), 2))
+    box = window.show_close_prompt()
+    QTimer.singleShot(300, box.reject)
+    try:
+        return _grab(box, path)
+    finally:
+        box.close()
+        window._prompt_on_close = False
+        window.close()
+
+
+def _four_captures(path: Path) -> Path:
+    import tempfile
+
+    from editor import EditorWindow
+
+    previous = os.environ.get("LOCALAPPDATA")
+    os.environ["LOCALAPPDATA"] = tempfile.mkdtemp()
+    window = EditorWindow(Image.new("RGB", (960, 540), "#e00000"))
+    try:
+        window.receive_capture(Image.new("RGB", (960, 540), "#2f9e44"), "Green")
+        window.receive_capture(Image.new("RGB", (960, 540), "#3949ab"), "Blue")
+        window._new_blank()
+        _present(window, 1024, 680)
+        return _grab(window, path)
+    finally:
+        window._prompt_on_close = False
         window.close()
         if previous is None:
             os.environ.pop("LOCALAPPDATA", None)

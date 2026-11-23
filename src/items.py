@@ -8,9 +8,9 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtGui import (
     QPainter, QPen, QBrush, QColor, QFont, QPainterPath,
-    QTextDocument, QTextCursor, QPixmap, QTransform, QPainterPathStroker
+    QTextDocument, QTextCursor, QPixmap, QPainterPathStroker
 )
-from PyQt6.QtCore import Qt, QRectF, QPointF, QSizeF
+from PyQt6.QtCore import Qt, QRectF, QPointF
 
 
 # ---------------------------------------------------------------------------
@@ -107,7 +107,7 @@ class RotateHandle(QGraphicsEllipseItem):
     def __init__(self, parent_item):
         super().__init__(-6, -6, 12, 12, parent_item)
         self.parent_item = parent_item
-        self.setBrush(QBrush(QColor("#0078d4")))
+        self.setBrush(QBrush(QColor("#4f46e5")))
         self.setPen(QPen(QColor("#ffffff"), 1))
         self.setZValue(1001)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, False)
@@ -146,10 +146,6 @@ class ResizableMixin:
             self.handles.append(h)
         self._update_handles()
         self._show_handles(False)
-
-    def _show_handles(self, visible: bool):
-        for h in self.handles:
-            h.setVisible(visible)
 
     def _update_handles(self):
         r = self._get_rect()
@@ -973,6 +969,84 @@ class NumberItem(QGraphicsItem):
         painter.drawText(QRectF(0, 0, 36, 36), int(Qt.AlignmentFlag.AlignCenter), str(self.number))
 
 
+def _finish_clone(source, clone):
+    if not isinstance(source, (TextItem, NumberItem, CalloutItem, StampItem)):
+        clone.setPos(source.pos())
+    clone.setRotation(source.rotation())
+    clone.setZValue(source.zValue())
+    clone.shadow_enabled = bool(getattr(source, "shadow_enabled", False))
+    clone.shadow_offset = getattr(source, "shadow_offset", 4)
+    clone.shadow_blur = getattr(source, "shadow_blur", 8)
+    apply_shadow(clone)
+    return clone
+
+
+def _rect_clone(self):
+    clone = RectItem(QRectF(self.rect()), self.pen_color, self.fill_color, self.line_width)
+    clone.corner_radius = self.corner_radius
+    return _finish_clone(self, clone)
+
+
+def _ellipse_clone(self):
+    return _finish_clone(self, EllipseItem(QRectF(self.rect()), self.pen_color, self.fill_color, self.line_width))
+
+
+def _spotlight_clone(self):
+    return _finish_clone(self, SpotlightItem(QRectF(self.rect()), self.darkness))
+
+
+def _arrow_clone(self):
+    clone = ArrowItem(QPointF(self.start), QPointF(self.end), self.pen_color, self.line_width, self.style)
+    clone.start_cap = self.start_cap
+    clone.end_cap = self.end_cap
+    return _finish_clone(self, clone)
+
+
+def _text_clone(self):
+    clone = TextItem(self.toPlainText(), self.pos(), self.defaultTextColor(), self.font().pointSize() or 14)
+    clone.bg_color = QColor(self.bg_color)
+    clone.set_bold(self.font().bold())
+    clone.outline_enabled = self.outline_enabled
+    return _finish_clone(self, clone)
+
+
+def _callout_clone(self):
+    clone = CalloutItem(self.pos(), self.pen_color, self.fill_color, self.text_color, self.line_width, self.font_size)
+    clone._text = self._text
+    clone._doc.setPlainText(self._text)
+    clone.set_rect(QRectF(self._rect))
+    return _finish_clone(self, clone)
+
+
+def _number_clone(self):
+    return _finish_clone(self, NumberItem(self.number, self.pos(), self.color))
+
+
+def _stroke_clone(self):
+    clone = StrokeItem(QColor(self.pen_color), self.line_width, self.highlighter)
+    for point in self._points:
+        clone.add_point(QPointF(point))
+    return _finish_clone(self, clone)
+
+
+def _polygon_clone(self):
+    return _finish_clone(self, PolygonItem(self.points, self.pen_color, self.fill_color, self.line_width))
+
+
+def _blur_clone(self):
+    return _finish_clone(self, BlurItem(QRectF(self.rect()), self.block))
+
+
+def _stamp_clone(self):
+    return _finish_clone(self, StampItem(self.toPlainText(), self.pos()))
+
+
+def _overlay_clone(self):
+    clone = ImageOverlayItem(QPixmap(self._original_pixmap), self.pos())
+    clone._set_rect(QRectF(self._current_rect))
+    return _finish_clone(self, clone)
+
+
 class PolygonItem(QGraphicsItem):
     """A closed polygon. Points are local to the item."""
 
@@ -1040,3 +1114,17 @@ class SpotlightItem(RectItem):
         painter.setPen(QPen(QColor(255, 255, 255, 200), 1.5))
         painter.setBrush(QBrush(Qt.BrushStyle.NoBrush))
         painter.drawRect(self.rect())
+
+
+RectItem.clone = _rect_clone
+EllipseItem.clone = _ellipse_clone
+SpotlightItem.clone = _spotlight_clone
+ArrowItem.clone = _arrow_clone
+TextItem.clone = _text_clone
+CalloutItem.clone = _callout_clone
+NumberItem.clone = _number_clone
+StrokeItem.clone = _stroke_clone
+PolygonItem.clone = _polygon_clone
+BlurItem.clone = _blur_clone
+StampItem.clone = _stamp_clone
+ImageOverlayItem.clone = _overlay_clone

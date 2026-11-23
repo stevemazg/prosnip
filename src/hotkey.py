@@ -31,6 +31,24 @@ PICK_HOTKEY_MODIFIERS = MOD_CONTROL | MOD_SHIFT | MOD_NOREPEAT
 
 WINDOWS_MSG_EVENT = "windows_generic_MSG"
 
+
+def parse_hotkey(text: str) -> tuple[int, int | None]:
+    """Return Win32 modifiers and a virtual-key code. Defaults stay Ctrl+Shift+S and Ctrl+Shift+P."""
+    modifiers = MOD_NOREPEAT
+    virtual_key = None
+    for part in (text or "").replace(" ", "").split("+"):
+        token = part.lower()
+        if token in {"ctrl", "control"}:
+            modifiers |= MOD_CONTROL
+        elif token == "shift":
+            modifiers |= MOD_SHIFT
+        elif token == "alt":
+            modifiers |= MOD_ALT
+        elif len(token) == 1 and token.isalpha():
+            virtual_key = ord(token.upper())
+    return modifiers, virtual_key
+
+
 TAKEN_MESSAGE = (
     "Could not register Ctrl+Shift+S. It may already be in use. "
     "Use the tray icon to capture."
@@ -146,6 +164,23 @@ class GlobalHotkey:
         self._filter: HotkeyEventFilter | None = None
         self._hwnd: int | None = None
         self._app = None
+
+    def configure(self, modifiers: int, virtual_key: int, label: str) -> str | None:
+        was = self._registered
+        app = self._app
+        if was:
+            self.unregister()
+        self._modifiers = int(modifiers) | MOD_NOREPEAT
+        self._virtual_key = int(virtual_key)
+        self._label = label
+        self._taken_message = (
+            f"Could not register {label}. It may already be in use. "
+            "Use the tray icon to capture."
+        )
+        self._unavailable_message = f"{label} is only available on Windows. Use the tray icon to capture."
+        if was and app is not None:
+            return self.register(app)
+        return None
 
     def register(self, app) -> str | None:
         """Register this hotkey.

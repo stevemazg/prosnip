@@ -122,6 +122,11 @@ class ColourHistory:
         self.toolbar_order = ""
         self.sidebar_visible = True
         self.tray_visible = True
+        self.capture_hotkey = "Ctrl+Shift+S"
+        self.pick_hotkey = "Ctrl+Shift+P"
+        self.retention_days = 0
+        self.confirm_close = True
+        self.canvas_colour = "#f4f5f6"
         self._extra: dict = {}
         self.load()
 
@@ -156,6 +161,14 @@ class ColourHistory:
         self.toolbar_order = str(data.get("toolbar_order") or "")
         self.sidebar_visible = bool(data.get("sidebar_visible", True))
         self.tray_visible = bool(data.get("tray_visible", True))
+        self.capture_hotkey = str(data.get("capture_hotkey") or "Ctrl+Shift+S")
+        self.pick_hotkey = str(data.get("pick_hotkey") or "Ctrl+Shift+P")
+        try:
+            self.retention_days = max(0, int(data.get("retention_days") or 0))
+        except (TypeError, ValueError):
+            self.retention_days = 0
+        self.confirm_close = bool(data.get("confirm_close", True))
+        self.canvas_colour = str(data.get("canvas_colour") or "#f4f5f6")
         colours = []
         for item in data.get("recent_colours", []):
             parsed = parse_hex(str(item))
@@ -183,6 +196,11 @@ class ColourHistory:
             "toolbar_order": self.toolbar_order,
             "sidebar_visible": self.sidebar_visible,
             "tray_visible": self.tray_visible,
+            "capture_hotkey": self.capture_hotkey,
+            "pick_hotkey": self.pick_hotkey,
+            "retention_days": self.retention_days,
+            "confirm_close": self.confirm_close,
+            "canvas_colour": self.canvas_colour,
         })
         _write_json(self.path, payload)
 
@@ -209,6 +227,26 @@ class ColourHistory:
         self.fill_colour = str(fill or "#E63946")
         self.fill_opacity = _percent(fill_opacity, 0)
         self.border_opacity = _percent(border_opacity, 100)
+        self.save()
+
+    def set_hotkeys(self, capture: str, pick: str) -> None:
+        self.capture_hotkey = (capture or "Ctrl+Shift+S").strip() or "Ctrl+Shift+S"
+        self.pick_hotkey = (pick or "Ctrl+Shift+P").strip() or "Ctrl+Shift+P"
+        self.save()
+
+    def set_retention(self, days: int) -> None:
+        try:
+            self.retention_days = max(0, int(days))
+        except (TypeError, ValueError):
+            self.retention_days = 0
+        self.save()
+
+    def set_confirm_close(self, enabled: bool) -> None:
+        self.confirm_close = bool(enabled)
+        self.save()
+
+    def set_canvas_colour(self, colour: str) -> None:
+        self.canvas_colour = str(colour or "#f4f5f6")
         self.save()
 
     def set_last_folder(self, folder: str) -> None:

@@ -4,7 +4,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtGui import (
     QPainter, QPen, QBrush, QColor, QPixmap, QImage,
-    QKeyEvent, QPainterPath, QTransform
+    QKeyEvent, QPainterPath
 )
 from PyQt6.QtCore import Qt, QRectF, QPointF, QEvent, pyqtSignal
 
@@ -71,6 +71,62 @@ class ProSnipScene(QGraphicsScene):
             if isinstance(item, QGraphicsPixmapItem) and item.zValue() < 0 and item.parentItem() is None:
                 return item
         return None
+
+    def edit_background(self, pixmap: QPixmap, point_fn=None):
+        """Replace the picture and transform annotations. One undo step."""
+        background = self.background_item()
+        if background is None:
+            return False
+        before = QPixmap(background.pixmap())
+        scene_before = QRectF(self.sceneRect())
+        annotations = [
+            item for item in self._annotations()
+            if not (isinstance(item, QGraphicsPixmapItem) and item.zValue() < 0)
+        ]
+        before_geo = [(item, _geometry(item)) for item in annotations]
+        if point_fn is not None:
+            for item in annotations:
+                _transform_item(item, point_fn)
+        pixmap.setDevicePixelRatio(1.0)
+        background.setPixmap(pixmap)
+        background.setPos(0, 0)
+        self.setSceneRect(QRectF(pixmap.rect()))
+        after_geo = [(item, _geometry(item)) for item in annotations]
+        self._undo_stack.append(_GeometryImageCommand(
+            background, before, QPixmap(pixmap), scene_before, QRectF(self.sceneRect()),
+            before_geo, after_geo,
+        ))
+        self._redo_stack.clear()
+        self.image_changed.emit()
+        return True
+
+    def flood_fill(self, pos: QPointF, colour: QColor) -> bool:
+        background = self.background_item()
+        if background is None:
+            return False
+        local = background.mapFromScene(pos)
+        image = background.pixmap().toImage().convertToFormat(QImage.Format.Format_ARGB32)
+        x, y = int(local.x()), int(local.y())
+        if not (0 <= x < image.width() and 0 <= y < image.height()):
+            return False
+        target = image.pixel(x, y)
+        filled = QColor(colour)
+        replacement = filled.rgba()
+        if target == replacement:
+            return False
+        width, height = image.width(), image.height()
+        stack = [(x, y)]
+        seen = 0
+        while stack and seen < 2_000_000:
+            cx, cy = stack.pop()
+            if cx < 0 or cy < 0 or cx >= width or cy >= height:
+                continue
+            if image.pixel(cx, cy) != target:
+                continue
+            image.setPixel(cx, cy, replacement)
+            seen += 1
+            stack.extend(((cx + 1, cy), (cx - 1, cy), (cx, cy + 1), (cx, cy - 1)))
+        return self.edit_background(QPixmap.fromImage(image), None)
 
     def set_pen_color(self, color: QColor):
         self._pen_color = QColor(color)
@@ -409,6 +465,10 @@ class ProSnipScene(QGraphicsScene):
         elif tool == "spotlight":
             item = self._place(SpotlightItem(QRectF(pos, pos), self.spotlight_darkness))
             self._current_item = item
+            event.accept()
+
+        elif tool == "fill":
+            self.flood_fill(pos, QColor(self._pen_color))
             event.accept()
 
         elif tool == "cutout":
@@ -807,7 +867,11 @@ class ProSnipScene(QGraphicsScene):
             self._redo_stack.clear()
         return undone
 
-    def flatten_selected(self):
+    def flatten_all(self):
+        self.select_all_annotations()
+        return self.flatten_selected()
+
+    def flatten_selected(self, selection_only: bool = False):
         background = self.background_item()
         if background is None:
             return False
@@ -815,7 +879,7 @@ class ProSnipScene(QGraphicsScene):
             item for item in self.selectedItems()
             if item is not background and item.parentItem() is None
         ]
-        if not selected:
+        if not selected and not selection_only:
             selected = [item for item in self._annotations() if item is not background]
         if not selected:
             return False
@@ -954,14 +1018,14 @@ class ProSnipView(QGraphicsView):
             and event.modifiers() == Qt.KeyboardModifier.ControlModifier
             and event.key() == Qt.Key.Key_0
         ):
-            self.fit_scene()
+            self.resetTransform()
             return
         if (
             not editing
             and event.modifiers() == Qt.KeyboardModifier.ControlModifier
-            and event.key() == Qt.Key.Key_1
+            and event.key() == Qt.Key.Key_9
         ):
-            self.resetTransform()
+            self.fit_scene()
             return
         super().keyPressEvent(event)
 
@@ -1131,6 +1195,124 @@ class _RemoveCommand:
             scene.removeItem(item)
 
 
+def _geometry(item) -> dict:
+    extra = {}
+    if isinstance(item, (RectItem, EllipseItem, BlurItem, SpotlightItem)):
+        extra["rect"] = QRectF(item.rect())
+    if isinstance(item, ArrowItem):
+        extra["start"] = QPointF(item.start)
+        extra["end"] = QPointF(item.end)
+    if isinstance(item, PolygonItem):
+        extra["points"] = [QPointF(point) for point in item.points]
+    if isinstance(item, StrokeItem):
+        extra["points"] = [QPointF(point) for point in item._points]
+    if isinstance(item, CalloutItem):
+        extra["rect"] = QRectF(item._rect)
+    return {"pos": QPointF(item.pos()), "rot": float(item.rotation()), "extra": extra}
+
+
+def _restore_geometry(item, geo: dict) -> None:
+    item.setPos(geo["pos"])
+    item.setRotation(geo["rot"])
+    extra = geo["extra"]
+    if isinstance(item, CalloutItem) and "rect" in extra:
+        item.set_rect(extra["rect"])
+    elif "rect" in extra and hasattr(item, "setRect"):
+        item.setRect(extra["rect"])
+    if isinstance(item, ArrowItem) and "start" in extra:
+        item.prepareGeometryChange()
+        item.start = QPointF(extra["start"])
+        item.end = QPointF(extra["end"])
+        item._update_handles()
+    if isinstance(item, PolygonItem) and "points" in extra:
+        item.prepareGeometryChange()
+        item.points = [QPointF(point) for point in extra["points"]]
+    if isinstance(item, StrokeItem) and "points" in extra:
+        item.prepareGeometryChange()
+        item._points = [QPointF(point) for point in extra["points"]]
+        item._rebuild()
+    item.update()
+
+
+def _map_local(item, local: QPointF, point_fn) -> QPointF:
+    return item.mapFromScene(point_fn(item.mapToScene(local)))
+
+
+def _transform_item(item, point_fn) -> None:
+    origin = point_fn(QPointF(0, 0))
+    step_x = point_fn(QPointF(1, 0)) - origin
+    step_y = point_fn(QPointF(0, 1)) - origin
+    if (
+        abs(step_x.x() - 1) < 1e-6 and abs(step_x.y()) < 1e-6
+        and abs(step_y.x()) < 1e-6 and abs(step_y.y() - 1) < 1e-6
+    ):
+        item.moveBy(origin.x(), origin.y())
+        return
+    if isinstance(item, ArrowItem):
+        item.prepareGeometryChange()
+        item.start = _map_local(item, item.start, point_fn)
+        item.end = _map_local(item, item.end, point_fn)
+        item._update_handles()
+        item.update()
+        return
+    if isinstance(item, CalloutItem):
+        item.set_rect(_mapped_rect(item, item._rect, point_fn))
+        return
+    if isinstance(item, (RectItem, EllipseItem, BlurItem, SpotlightItem)):
+        item.setRect(_mapped_rect(item, item.rect(), point_fn))
+        if hasattr(item, "_update_handles"):
+            item._update_handles()
+        return
+    if isinstance(item, PolygonItem):
+        item.prepareGeometryChange()
+        item.points = [_map_local(item, point, point_fn) for point in item.points]
+        item.update()
+        return
+    if isinstance(item, StrokeItem):
+        item.prepareGeometryChange()
+        item._points = [_map_local(item, point, point_fn) for point in item._points]
+        item._rebuild()
+        item.update()
+        return
+    item.setPos(point_fn(item.pos()))
+
+
+def _mapped_rect(item, rect: QRectF, point_fn) -> QRectF:
+    corners = [
+        _map_local(item, rect.topLeft(), point_fn),
+        _map_local(item, rect.topRight(), point_fn),
+        _map_local(item, rect.bottomLeft(), point_fn),
+        _map_local(item, rect.bottomRight(), point_fn),
+    ]
+    xs = [point.x() for point in corners]
+    ys = [point.y() for point in corners]
+    return QRectF(min(xs), min(ys), max(xs) - min(xs), max(ys) - min(ys))
+
+
+class _GeometryImageCommand:
+    def __init__(self, item, before, after, scene_before, scene_after, before_geo, after_geo):
+        self.item = item
+        self.before = before
+        self.after = after
+        self.scene_before = scene_before
+        self.scene_after = scene_after
+        self.before_geo = before_geo
+        self.after_geo = after_geo
+
+    def _apply(self, scene, pixmap, rect, geos):
+        self.item.setPixmap(pixmap)
+        scene.setSceneRect(rect)
+        for item, geo in geos:
+            _restore_geometry(item, geo)
+        scene.image_changed.emit()
+
+    def undo(self, scene):
+        self._apply(scene, self.before, self.scene_before, self.before_geo)
+
+    def redo(self, scene):
+        self._apply(scene, self.after, self.scene_after, self.after_geo)
+
+
 class _ImageCommand:
     """Pixmap edit plus any annotations removed or shifted to close a gap."""
 
@@ -1194,44 +1376,34 @@ class _UngroupCommand:
         scene.removeItem(self.group)
 
 
-def _clone_item(item):
-    clone = None
-    if isinstance(item, RectItem):
-        clone = RectItem(QRectF(item.rect()), item.pen_color, item.fill_color, item.line_width)
-        clone.corner_radius = item.corner_radius
-    elif isinstance(item, EllipseItem):
-        clone = EllipseItem(QRectF(item.rect()), item.pen_color, item.fill_color, item.line_width)
-    elif isinstance(item, TextItem):
-        clone = TextItem(item.toPlainText(), item.pos(), item.defaultTextColor(), item.font().pointSize() or 14)
-        clone.bg_color = QColor(item.bg_color)
-        clone.set_bold(item.font().bold())
-    elif isinstance(item, NumberItem):
-        clone = NumberItem(item.number, item.pos(), item.color)
-    elif isinstance(item, BlurItem):
-        clone = BlurItem(QRectF(item.rect()), item.block)
-    elif isinstance(item, ArrowItem):
-        clone = ArrowItem(QPointF(item.start), QPointF(item.end), item.pen_color, item.line_width, item.style)
-        clone.start_cap = item.start_cap
-        clone.end_cap = item.end_cap
-    elif isinstance(item, PolygonItem):
-        clone = PolygonItem(item.points, item.pen_color, item.fill_color, item.line_width)
-    elif isinstance(item, SpotlightItem):
-        clone = SpotlightItem(QRectF(item.rect()), item.darkness)
-    elif isinstance(item, StrokeItem):
-        clone = StrokeItem(QColor(item.pen_color), item.line_width, item.highlighter)
-        for point in item._points:
-            clone.add_point(QPointF(point))
+def _copy_common(source, clone):
     if clone is None:
         return None
-    if not isinstance(item, (TextItem, NumberItem)):
-        clone.setPos(item.pos())
-    clone.setRotation(item.rotation())
-    clone.setZValue(item.zValue())
-    clone.shadow_enabled = bool(getattr(item, "shadow_enabled", False))
-    clone.shadow_offset = getattr(item, "shadow_offset", 4)
-    clone.shadow_blur = getattr(item, "shadow_blur", 8)
+    if not isinstance(source, (TextItem, NumberItem, CalloutItem, StampItem)):
+        clone.setPos(source.pos())
+    clone.setRotation(source.rotation())
+    clone.setZValue(source.zValue())
+    clone.shadow_enabled = bool(getattr(source, "shadow_enabled", False))
+    clone.shadow_offset = getattr(source, "shadow_offset", 4)
+    clone.shadow_blur = getattr(source, "shadow_blur", 8)
     apply_shadow(clone)
     return clone
+
+
+def _clone_item(item):
+    if isinstance(item, QGraphicsItemGroup):
+        group = QGraphicsItemGroup()
+        for child in list(item.childItems()):
+            cloned = _clone_item(child)
+            if cloned is not None:
+                group.addToGroup(cloned)
+        group.setPos(item.pos())
+        group.setZValue(item.zValue())
+        return group
+    method = getattr(item, "clone", None)
+    if method is None:
+        return None
+    return method()
 
 
 def _text_keeps_key(event) -> bool:

@@ -24,9 +24,11 @@ class Peer:
         self.pid = pid
 
     def close(self) -> bool:
-        """Ask a current build to quit, then terminate the process if it is still there."""
+        """Ask the other instance to quit so it can autosave, then terminate only our exe."""
         asked = _send(b"QUIT\n")
         if self.pid and self.pid != _own_pid():
+            if _wait_for_exit(self.pid, 3000):
+                return True
             if _terminate(self.pid):
                 return True
         return asked
@@ -253,8 +255,54 @@ def _file_version(pid: int | None) -> str | None:
         return None
 
 
+def _process_path(pid: int) -> str | None:
+    if sys.platform != "win32":
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        handle = kernel.OpenProcess(0x1000, False, pid)
+        if not handle:
+            return None
+        try:
+            size = wintypes.DWORD(32768)
+            buf = ctypes.create_unicode_buffer(size.value)
+            if not kernel.QueryFullProcessImageNameW(handle, 0, buf, ctypes.byref(size)):
+                return None
+            return buf.value
+        finally:
+            kernel.CloseHandle(handle)
+    except Exception:
+        return None
+
+
+def _wait_for_exit(pid: int, timeout_ms: int) -> bool:
+    if sys.platform != "win32" or pid == _own_pid():
+        return False
+    try:
+        import ctypes
+
+        kernel = ctypes.windll.kernel32
+        handle = kernel.OpenProcess(0x00100000, False, pid)
+        if not handle:
+            return True
+        try:
+            waited = kernel.WaitForSingleObject(handle, int(timeout_ms))
+            return waited == 0
+        finally:
+            kernel.CloseHandle(handle)
+    except Exception:
+        return False
+
+
 def _terminate(pid: int) -> bool:
     if sys.platform != "win32" or pid == _own_pid():
+        return False
+    image = _process_path(pid)
+    if not image or not image.lower().endswith("prosnip-bob.exe"):
+        log.error("Refusing to terminate pid %s (%s); it is not ProSnip-Bob", pid, image)
         return False
     try:
         import ctypes

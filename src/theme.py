@@ -13,89 +13,9 @@ PANEL = QColor("#323232")
 RAISED = QColor("#383838")
 TEXT = QColor("#e6e6e6")
 MUTED = QColor("#a0a0a0")
-ACCENT = QColor("#3d8ee6")
+ACCENT = QColor("#4f46e5")
 BORDER = QColor("#4a4a4a")
 WHITE = QColor("#ffffff")
-
-
-DARK_STYLE = """
-QWidget {
-    background-color: #2b2b2b;
-    color: #e6e6e6;
-    font-size: 13px;
-}
-QMainWindow, QDialog, QMenuBar, QMenu, QStatusBar {
-    background-color: #2b2b2b;
-    color: #e6e6e6;
-}
-QMenuBar::item:selected, QMenu::item:selected {
-    background-color: #3d8ee6;
-    color: #ffffff;
-}
-QMenu {
-    border: 1px solid #4a4a4a;
-}
-QDockWidget {
-    color: #e6e6e6;
-    titlebar-close-icon: none;
-}
-QDockWidget::title {
-    background: #323232;
-    color: #e6e6e6;
-    padding: 6px 8px;
-    text-align: left;
-    border-bottom: 1px solid #4a4a4a;
-}
-QLabel { color: #e6e6e6; background: transparent; }
-QLabel#muted { color: #a0a0a0; }
-QPushButton, QComboBox, QListWidget, QPlainTextEdit, QTextEdit {
-    background-color: #383838;
-    color: #e6e6e6;
-    border: 1px solid #4a4a4a;
-    border-radius: 4px;
-    padding: 4px 8px;
-    min-height: 22px;
-}
-QLineEdit {
-    background-color: #383838;
-    color: #e6e6e6;
-    border: 1px solid #4a4a4a;
-    border-radius: 4px;
-    padding: 2px 6px;
-    min-height: 18px;
-}
-QPushButton:hover, QComboBox:hover {
-    border-color: #3d8ee6;
-}
-QPushButton:checked {
-    background-color: #3d8ee6;
-    color: #ffffff;
-    border-color: #ffffff;
-}
-QComboBox QAbstractItemView, QListWidget {
-    background-color: #323232;
-    color: #e6e6e6;
-    selection-background-color: #3d8ee6;
-    selection-color: #ffffff;
-    outline: 0;
-}
-QStatusBar { background: #323232; color: #e6e6e6; }
-QStatusBar::item { border: none; }
-QToolTip {
-    background-color: #141414;
-    color: #ffffff;
-    border: 1px solid #ffffff;
-    padding: 8px 12px;
-    font-size: 12pt;
-    font-weight: bold;
-}
-QScrollBar:vertical, QScrollBar:horizontal {
-    background: #2b2b2b;
-    border: none;
-}
-QMessageBox { background: #2b2b2b; }
-QMessageBox QLabel { color: #e6e6e6; }
-"""
 
 
 def relative_luminance(colour: QColor) -> float:
@@ -155,7 +75,7 @@ DARK = {
     "raised": "#3a4042",
     "text": "#f3f4f6",
     "muted": "#c5cdd1",
-    "accent": "#818cf8",
+    "accent": "#4f46e5",
     "border": "#4a5154",
     "workspace": "#2b2b2b",
 }

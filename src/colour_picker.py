@@ -18,7 +18,7 @@ from PyQt6.QtGui import (
     QPainter,
     QPen,
 )
-from PyQt6.QtWidgets import QApplication, QLabel, QWidget
+from PyQt6.QtWidgets import QLabel, QWidget
 
 from colour import (
     ZOOM_DEFAULT,

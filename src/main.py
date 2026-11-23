@@ -7,7 +7,6 @@ from PyQt6.QtCore import QObject, QThread, QTimer, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QGuiApplication, QIcon, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
 
-import demo_screenshots
 from capture import CaptureOverlay
 from colour import ColourHistory
 from colour_card import show_colour_card
@@ -153,7 +152,7 @@ def _make_tray_icon() -> QIcon:
     pix = QPixmap(32, 32)
     pix.fill(Qt.GlobalColor.transparent)
     painter = QPainter(pix)
-    painter.setBrush(QColor("#0078d4"))
+    painter.setBrush(QColor("#3730a3"))
     painter.setPen(QPen(Qt.PenStyle.NoPen))
     painter.drawRoundedRect(2, 2, 28, 28, 6, 6)
     painter.setPen(QColor("#ffffff"))
@@ -219,6 +218,7 @@ class ProSnipApp:
         self._setup_main_window()
         self._show_main_window()
         self._register_hotkey()
+        self._main_window.hotkeys_changed = self._apply_hotkeys
 
     def _capture_in_progress(self) -> bool:
         if self._capture_pending or self._picker_pending:
@@ -282,6 +282,21 @@ class ProSnipApp:
             QSystemTrayIcon.ActivationReason.DoubleClick,
         ):
             self._show_main_window()
+
+    def _apply_hotkeys(self):
+        from hotkey import parse_hotkey
+
+        history = ColourHistory()
+        for hotkey, label in (
+            (self._hotkey, history.capture_hotkey),
+            (self._pick_hotkey, history.pick_hotkey),
+        ):
+            if hotkey is None:
+                continue
+            modifiers, virtual_key = parse_hotkey(label)
+            if virtual_key is None:
+                continue
+            hotkey.configure(modifiers, virtual_key, label)
 
     def _register_hotkey(self):
         # WM_HOTKEY is delivered on the GUI thread, so the signal is emitted
@@ -408,7 +423,7 @@ class ProSnipApp:
         self._finish_picker_ui()
         for editor in list(self._editors):
             try:
-                editor._toolbar.reload_history()
+                editor._options.refresh()
             except Exception:
                 log.exception("Could not refresh recent colours")
         if not hex_code:
@@ -419,7 +434,6 @@ class ProSnipApp:
             if target is None:
                 return
             colour = QColor(hex_code)
-            target._toolbar.set_pen_colour(colour)
             target._options.set_border_colour(colour)
         except Exception:
             log.exception("Could not apply the picked colour")
@@ -508,6 +522,7 @@ class ProSnipApp:
             lambda ed=editor: self._show_colour_picker(ed)
         )
         editor.new_capture_requested.connect(self._show_capture)
+        editor.preferences_changed.connect(self._apply_hotkeys)
         editor.show()
         editor.raise_()
         editor.activateWindow()
@@ -520,9 +535,17 @@ class ProSnipApp:
         self._server = None
 
     def _quit(self):
+        for editor in self._living_editors():
+            editor.close()
+            try:
+                if editor.isVisible():
+                    return
+            except RuntimeError:
+                continue
         if self._main_window is not None:
             self._main_window.allow_close()
             self._main_window.close()
+        _mark_clean_exit()
         try:
             if self._hotkey is not None:
                 self._hotkey.unregister()
@@ -537,6 +560,36 @@ class ProSnipApp:
         sys.exit(self._app.exec())
 
 
+def _mark_session_start() -> None:
+    """Enable faulthandler and note a previous crash."""
+    global _log_handle
+    import faulthandler
+
+    path = resolve_log_path()
+    if path is None:
+        return
+    try:
+        previous = path.read_text(encoding="utf-8") if path.is_file() else ""
+    except OSError:
+        previous = ""
+    if "START " in previous and "EXIT clean" not in previous.rsplit("START ", 1)[-1]:
+        log.warning("The previous session did not exit cleanly")
+    _log_handle = open(path, "a", encoding="utf-8")
+    _log_handle.write(f"\nSTART {APP_VERSION}\n")
+    _log_handle.flush()
+    faulthandler.enable(_log_handle, all_threads=True)
+
+
+def _mark_clean_exit() -> None:
+    if _log_handle is None:
+        return
+    _log_handle.write("EXIT clean\n")
+    _log_handle.flush()
+
+
+_log_handle = None
+
+
 def main():
     setup_logging()
     sys.excepthook = _excepthook
@@ -545,9 +598,7 @@ def main():
     QGuiApplication.setHighDpiScaleFactorRoundingPolicy(
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
     )
-    demo_folder = demo_screenshots.demo_output_dir(sys.argv)
-    if demo_folder is not None:
-        raise SystemExit(demo_screenshots.capture_demo_screenshots(demo_folder))
+    _mark_session_start()
     app = ProSnipApp()
     if app.forwarded:
         sys.exit(0)

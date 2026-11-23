@@ -57,7 +57,7 @@ ARROW_LABELS = {
 MENU_STYLE = """
 QMenu { background-color: #2b2b2b; color: #e6e6e6; border: 1px solid #4a4a4a; }
 QMenu::item { padding: 6px 18px; background: transparent; }
-QMenu::item:selected { background-color: #3d8ee6; color: #ffffff; }
+QMenu::item:selected { background-color: #4f46e5; color: #ffffff; }
 QLabel { color: #e6e6e6; background: transparent; }
 """
 
@@ -642,6 +642,11 @@ class ToolOptions(QWidget):
         if hasattr(item, "_apply_style"):
             item._apply_style()
         item.update()
+
+    def apply_preset(self, colour: QColor, width: int, dashed: bool):
+        self.set_border_colour(QColor(colour))
+        self._width.setValue(max(1, int(width)))
+        self._set_arrow_style("dashed" if dashed else "plain")
 
     def set_border_colour(self, colour: QColor, transparent: bool = False):
         self._colour = QColor(colour)

@@ -5,7 +5,7 @@ from PyQt6.QtGui import QBrush, QColor, QIcon, QPainter, QPalette, QPen, QPixmap
 
 
 @dataclass
-class QuickStyle:
+class StylePreset:
     name: str
     pen_color: QColor
     fill_color: QColor
@@ -15,12 +15,12 @@ class QuickStyle:
 
 
 STYLES = {
-    "Red": QuickStyle("Red", QColor("#e63946"), QColor("#e6394630"), QColor("#e63946"), 2, 14),
-    "Blue": QuickStyle("Blue", QColor("#1d3557"), QColor("#1d355730"), QColor("#1d3557"), 2, 14),
-    "Green": QuickStyle("Green", QColor("#2d6a4f"), QColor("#2d6a4f30"), QColor("#2d6a4f"), 2, 14),
-    "Corporate": QuickStyle("Corporate", QColor("#003049"), QColor("#00304920"), QColor("#003049"), 2, 13),
-    "High Contrast": QuickStyle("High Contrast", QColor("#ffffff"), QColor("#00000080"), QColor("#ffffff"), 3, 14),
-    "Yellow Highlight": QuickStyle("Yellow Highlight", QColor("#f4a261"), QColor("#f4a26160"), QColor("#000000"), 1, 14),
+    "Red": StylePreset("Red", QColor("#e63946"), QColor("#e6394630"), QColor("#e63946"), 2, 14),
+    "Blue": StylePreset("Blue", QColor("#1d3557"), QColor("#1d355730"), QColor("#1d3557"), 2, 14),
+    "Green": StylePreset("Green", QColor("#2d6a4f"), QColor("#2d6a4f30"), QColor("#2d6a4f"), 2, 14),
+    "Corporate": StylePreset("Corporate", QColor("#003049"), QColor("#00304920"), QColor("#003049"), 2, 13),
+    "High Contrast": StylePreset("High Contrast", QColor("#ffffff"), QColor("#00000080"), QColor("#ffffff"), 3, 14),
+    "Yellow Highlight": StylePreset("Yellow Highlight", QColor("#f4a261"), QColor("#f4a26160"), QColor("#000000"), 1, 14),
 }
 DEFAULT_STYLE = STYLES["Red"]
 
@@ -36,7 +36,7 @@ QComboBox {
 QComboBox QAbstractItemView {
     background-color: #2b2b2b;
     color: #f7f7f7;
-    selection-background-color: #0078d4;
+    selection-background-color: #4f46e5;
     selection-color: #ffffff;
     outline: 0;
     border: 1px solid #6a6a6a;
@@ -48,7 +48,7 @@ QComboBox QAbstractItemView::item {
     background-color: #2b2b2b;
 }
 QComboBox QAbstractItemView::item:selected {
-    background-color: #0078d4;
+    background-color: #4f46e5;
     color: #ffffff;
 }
 """
@@ -57,7 +57,7 @@ POPUP_STYLE = """
 QAbstractItemView {
     background-color: #2b2b2b;
     color: #f7f7f7;
-    selection-background-color: #0078d4;
+    selection-background-color: #4f46e5;
     selection-color: #ffffff;
     outline: 0;
 }
@@ -68,7 +68,7 @@ QAbstractItemView::item {
     background-color: #2b2b2b;
 }
 QAbstractItemView::item:selected {
-    background-color: #0078d4;
+    background-color: #4f46e5;
     color: #ffffff;
 }
 """
@@ -122,6 +122,6 @@ def apply_combo_contrast(combo) -> None:
     palette = view.palette()
     palette.setColor(QPalette.ColorRole.Base, QColor("#2b2b2b"))
     palette.setColor(QPalette.ColorRole.Text, QColor("#f7f7f7"))
-    palette.setColor(QPalette.ColorRole.Highlight, QColor("#0078d4"))
+    palette.setColor(QPalette.ColorRole.Highlight, QColor("#4f46e5"))
     palette.setColor(QPalette.ColorRole.HighlightedText, QColor("#ffffff"))
     view.setPalette(palette)

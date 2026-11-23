@@ -163,6 +163,7 @@ class PreviewTile(QWidget):
 
 class SideBar(QWidget):
     preset_chosen = pyqtSignal(QColor)
+    style_chosen = pyqtSignal(QColor, int, bool)
     select_all_requested = pyqtSignal()
 
     def __init__(self, options, history, parent=None):
@@ -282,7 +283,11 @@ class SideBar(QWidget):
         for index, tile in enumerate(tiles):
             name, colour, width, dashed = tile
             button = PreviewTile(name, colour, width, dashed, self._tool)
-            button.clicked.connect(lambda _checked=False, value=colour: self.preset_chosen.emit(QColor(value)))
+            button.clicked.connect(
+                lambda _checked=False, value=colour, wide=width, dash=dashed: self.style_chosen.emit(
+                    QColor(value), int(wide), bool(dash)
+                )
+            )
             button.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
             button.customContextMenuRequested.connect(
                 lambda pos, tile_name=name, source=button: self._tile_menu(source, tile_name, pos)

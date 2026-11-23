@@ -1,8 +1,11 @@
 """Recent captures tray. Files stay in the library folder when a card is removed."""
 
 import json
+import logging
 import time
 from pathlib import Path
+
+log = logging.getLogger("prosnip")
 
 from PyQt6 import sip
 from PyQt6.QtCore import Qt, pyqtSignal
@@ -16,6 +19,31 @@ CARD_H = 4 + THUMB_H + 2 + CAPTION_H + 6
 TRAY_H = 4 + CARD_H + 14 + 4
 
 from PIL import Image
+
+
+def purge_expired(days: int) -> None:
+    """Delete captures older than ``days``. Zero keeps the library."""
+    if days <= 0:
+        return
+    cutoff = time.time() - int(days) * 86400
+    folder = library_dir()
+    for meta_path in list(folder.glob("*.json")):
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            if not isinstance(meta, dict):
+                continue
+            created = float(meta.get("created") or meta_path.stat().st_mtime)
+        except Exception:
+            continue
+        if created >= cutoff:
+            continue
+        image = Path(str(meta.get("path") or ""))
+        for path in (meta_path, image, meta_path.with_suffix(".psnip")):
+            try:
+                if path.is_file():
+                    path.unlink()
+            except OSError:
+                log.exception("Could not delete %s", path)
 
 
 def library_dir() -> Path:
@@ -108,11 +136,14 @@ class RecentTray(QWidget):
         for meta_path in folder.glob("*.json"):
             try:
                 meta = json.loads(meta_path.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError):
+                if not isinstance(meta, dict):
+                    raise ValueError("tray entry is not an object")
+                created = float(meta.get("created") or meta_path.stat().st_mtime)
+            except Exception:
+                log.exception("Skipping damaged tray file %s", meta_path)
                 continue
             if meta.get("hidden"):
                 continue
-            created = float(meta.get("created") or meta_path.stat().st_mtime)
             cards.append((bool(meta.get("pinned")), created, meta_path, meta))
         cards.sort(key=lambda item: (not item[0], -item[1]))
         shown = cards[:30]
@@ -150,22 +181,51 @@ class RecentTray(QWidget):
         if not pix.isNull():
             card.set_pixmap(pix)
         card.pin_clicked.connect(lambda source=meta_path: self._pin(source))
-        card.close_clicked.connect(lambda source=meta_path: self._hide(source))
+        card.close_clicked.connect(lambda source=meta_path: self._delete(source))
         card.activated.connect(self.opened.emit)
         if meta.get("pinned"):
             card._pin.setText("●")
         return card
 
-    def _hide(self, meta_path: Path):
-        meta = json.loads(meta_path.read_text(encoding="utf-8"))
-        meta["hidden"] = True
-        meta_path.write_text(json.dumps(meta), encoding="utf-8")
+    def set_unsaved(self, path: str | None, unsaved: bool):
+        if not path:
+            return
+        meta_path = Path(path).with_suffix(".json")
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            if not isinstance(meta, dict):
+                return
+            meta["unsaved"] = bool(unsaved)
+            meta_path.write_text(json.dumps(meta), encoding="utf-8")
+        except Exception:
+            log.exception("Could not update %s", meta_path)
+        self.reload()
+
+    def _delete(self, meta_path: Path):
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            image = Path(meta.get("path") or "")
+        except Exception:
+            log.exception("Skipping damaged tray file %s", meta_path)
+            image = meta_path.with_suffix(".png")
+        for path in (meta_path, image, meta_path.with_suffix(".psnip")):
+            try:
+                if path.is_file():
+                    path.unlink()
+            except OSError:
+                log.exception("Could not delete %s", path)
         self.reload()
 
     def _pin(self, meta_path: Path):
-        meta = json.loads(meta_path.read_text(encoding="utf-8"))
-        meta["pinned"] = not bool(meta.get("pinned"))
-        meta_path.write_text(json.dumps(meta), encoding="utf-8")
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            if not isinstance(meta, dict):
+                raise ValueError("tray entry is not an object")
+            meta["pinned"] = not bool(meta.get("pinned"))
+            meta_path.write_text(json.dumps(meta), encoding="utf-8")
+        except Exception:
+            log.exception("Skipping damaged tray file %s", meta_path)
+            return
         self.reload()
 
 
