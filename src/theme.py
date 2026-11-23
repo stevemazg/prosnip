@@ -68,6 +68,8 @@ LIGHT = {
     "accent": "#3730a3",
     "border": "#c5c9cc",
     "workspace": "#f4f5f6",
+    "tray_fill": "#c7d2fe",
+    "tray_text": "#3730a3",
 }
 DARK = {
     "window": "#141616",
@@ -78,6 +80,8 @@ DARK = {
     "accent": "#4f46e5",
     "border": "#4a5154",
     "workspace": "#2b2b2b",
+    "tray_fill": "#1e1b4b",
+    "tray_text": "#e0e7ff",
 }
 
 
@@ -109,6 +113,16 @@ QPushButton, QComboBox, QListWidget, QPlainTextEdit, QTextEdit, QLineEdit {{
 }}
 QAbstractSpinBox QLineEdit {{ background: transparent; border: none; padding: 0; min-height: 0; color: {colours['text']}; }}
 QPushButton:checked {{ background-color: {colours['accent']}; color: #ffffff; border-color: {colours['accent']}; }}
+QCheckBox::indicator {{
+    width: 14px; height: 14px;
+    border: 2px solid {colours['text']};
+    background: {colours['panel']};
+    border-radius: 2px;
+}}
+QCheckBox::indicator:checked {{
+    background: {colours['accent']};
+    border: 2px solid {colours['accent']};
+}}
 QToolTip {{ background-color: #141414; color: #ffffff; border: 1px solid #ffffff; padding: 6px 8px; }}
 QSplitter::handle {{ background-color: {colours['border']}; }}
 """

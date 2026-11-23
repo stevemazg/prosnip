@@ -115,7 +115,17 @@ class ToolOptions(QWidget):
             """
             QWidget#ToolProperties { background: transparent; }
             QLabel { color: palette(window-text); background: transparent; font-size: 12px; }
-            QCheckBox { color: palette(window-text); background: transparent; spacing: 4px; }
+            QCheckBox { color: palette(window-text); background: transparent; spacing: 6px; }
+            QCheckBox::indicator {
+                width: 14px; height: 14px;
+                border: 2px solid palette(window-text);
+                background: palette(base);
+                border-radius: 2px;
+            }
+            QCheckBox::indicator:checked {
+                background: #4f46e5;
+                border: 2px solid #4f46e5;
+            }
             QPushButton#ArrowStyle {
                 background: palette(button); color: palette(button-text);
                 border: 1px solid palette(mid); border-radius: 3px;

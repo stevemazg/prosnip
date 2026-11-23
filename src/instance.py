@@ -27,7 +27,7 @@ class Peer:
         """Ask the other instance to quit so it can autosave, then terminate only our exe."""
         asked = _send(b"QUIT\n")
         if self.pid and self.pid != _own_pid():
-            if _wait_for_exit(self.pid, 3000):
+            if _wait_for_exit(self.pid, 10000):
                 return True
             if _terminate(self.pid):
                 return True

@@ -109,24 +109,21 @@ class ProSnipScene(QGraphicsScene):
         x, y = int(local.x()), int(local.y())
         if not (0 <= x < image.width() and 0 <= y < image.height()):
             return False
-        target = image.pixel(x, y)
-        filled = QColor(colour)
-        replacement = filled.rgba()
-        if target == replacement:
-            return False
-        width, height = image.width(), image.height()
-        stack = [(x, y)]
-        seen = 0
-        while stack and seen < 2_000_000:
-            cx, cy = stack.pop()
-            if cx < 0 or cy < 0 or cx >= width or cy >= height:
-                continue
-            if image.pixel(cx, cy) != target:
-                continue
-            image.setPixel(cx, cy, replacement)
-            seen += 1
-            stack.extend(((cx + 1, cy), (cx - 1, cy), (cx, cy + 1), (cx, cy - 1)))
-        return self.edit_background(QPixmap.fromImage(image), None)
+        from PIL import Image as PILImage
+        from PIL import ImageDraw
+
+        bits = image.bits()
+        bits.setsize(image.sizeInBytes())
+        picture = PILImage.frombytes(
+            "RGBA", (image.width(), image.height()), bytes(bits), "raw", "RGBA", image.bytesPerLine(), 1,
+        )
+        ImageDraw.floodfill(
+            picture, (x, y),
+            (int(colour.red()), int(colour.green()), int(colour.blue()), int(colour.alpha())),
+        )
+        raw = picture.tobytes("raw", "RGBA")
+        filled = QImage(raw, picture.width, picture.height, QImage.Format.Format_RGBA8888).copy()
+        return self.edit_background(QPixmap.fromImage(filled), None)
 
     def set_pen_color(self, color: QColor):
         self._pen_color = QColor(color)
@@ -587,7 +584,6 @@ class ProSnipScene(QGraphicsScene):
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
-        pos = event.scenePos()
         tool = self._tool
 
         if tool == "select":
@@ -1022,8 +1018,10 @@ class ProSnipView(QGraphicsView):
             return
         if (
             not editing
-            and event.modifiers() == Qt.KeyboardModifier.ControlModifier
-            and event.key() == Qt.Key.Key_9
+            and event.modifiers() == (
+                Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier
+            )
+            and event.key() == Qt.Key.Key_0
         ):
             self.fit_scene()
             return

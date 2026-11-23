@@ -15,7 +15,6 @@ from PyQt6.QtWidgets import QApplication
 
 log = logging.getLogger("prosnip.demo")
 import os
-os.environ["PROSNIP_AUTOCLOSE"] = "1"
 # Screenshot grabs follow the editor shell: toolbar, sidebar, tray.
 
 
@@ -30,6 +29,8 @@ def demo_output_dir(argv: list[str]) -> Path | None:
 
 
 def capture_demo_screenshots(folder: Path) -> int:
+    from editor import EditorWindow
+    EditorWindow.prompt_on_close = False
     import faulthandler
 
     folder = Path(folder)
@@ -99,6 +100,10 @@ def capture_demo_screenshots(folder: Path) -> int:
         saved.append(_close_prompt(folder / "44-close-prompt.png"))
         saved.append(_four_captures(folder / "45-four-captures.png"))
         saved.append(_editor_theme(folder / "46-dark-accent.png", 1024, 680, "dark"))
+        saved.append(_checks(folder / "47-checks-light.png", "light"))
+        saved.append(_checks(folder / "48-checks-dark.png", "dark"))
+        saved.append(_delete_confirm(folder / "49-delete-confirm.png"))
+        saved.append(_reopened(folder / "50-reopen-group.png"))
         _assert_sizes()
         editor.close()
     except Exception:
@@ -614,6 +619,76 @@ def _four_captures(path: Path) -> Path:
     finally:
         window._prompt_on_close = False
         window.close()
+        if previous is None:
+            os.environ.pop("LOCALAPPDATA", None)
+        else:
+            os.environ["LOCALAPPDATA"] = previous
+
+
+def _checks(path: Path, mode: str) -> Path:
+    from theme import apply_theme
+    window = _editor_window()
+    window._theme = apply_theme(mode)
+    window._apply_workspace()
+    window._on_tool_changed("arrow")
+    window._options._shadow.setVisible(True)
+    window._options._outline.setVisible(True)
+    window._options._curve.setVisible(True)
+    _present(window, 1024, 680)
+    try:
+        return _grab(window._sidebar, path)
+    finally:
+        window.close()
+
+
+def _delete_confirm(path: Path) -> Path:
+    from PyQt6.QtCore import QTimer
+    from PyQt6.QtWidgets import QMessageBox
+    window = _editor_window()
+    _present(window, 1024, 680)
+    dialog = QMessageBox(window)
+    dialog.setIcon(dialog.Icon.Warning)
+    dialog.setWindowTitle("Delete capture")
+    dialog.setText("Delete this capture? The files go to the Recycle Bin.")
+    dialog.setStandardButtons(dialog.StandardButton.Yes | dialog.StandardButton.No)
+    QTimer.singleShot(300, dialog.reject)
+    try:
+        return _grab(dialog, path)
+    finally:
+        dialog.close()
+        window.close()
+
+
+def _reopened(path: Path) -> Path:
+    import tempfile
+    from editor import EditorWindow
+    from PyQt6.QtGui import QPixmap
+    from items import ImageOverlayItem, RectItem
+
+    previous = os.environ.get("LOCALAPPDATA")
+    os.environ["LOCALAPPDATA"] = tempfile.mkdtemp()
+    window = EditorWindow(Image.new("RGB", (200, 100), "#d7e6f5"))
+    try:
+        scene = window._scene
+        one = RectItem(QRectF(70, 20, 30, 24), QColor("#e00000"), QColor(224, 0, 0, 80), 2)
+        two = RectItem(QRectF(110, 20, 30, 24), QColor("#3949ab"), QColor(57, 73, 171, 60), 2)
+        scene.addItem(one)
+        scene.addItem(two)
+        one.setSelected(True)
+        two.setSelected(True)
+        scene.group_selected()
+        pix = QPixmap(24, 16)
+        pix.fill(QColor("#111111"))
+        scene.addItem(ImageOverlayItem(pix, QPointF(20, 30)))
+        window._on_crop_requested(QRectF(40, 0, 160, 100))
+        saved = window._active_path
+        window.autosave_active()
+        window.close()
+        again = EditorWindow(Image.new("RGB", (40, 20), "white"))
+        again._open_recent(saved)
+        _present(again, 1024, 680)
+        return _grab(again, path)
+    finally:
         if previous is None:
             os.environ.pop("LOCALAPPDATA", None)
         else:

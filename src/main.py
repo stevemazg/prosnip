@@ -295,8 +295,11 @@ class ProSnipApp:
                 continue
             modifiers, virtual_key = parse_hotkey(label)
             if virtual_key is None:
+                self._notify(f"{label} is not a recognised hotkey.")
                 continue
-            hotkey.configure(modifiers, virtual_key, label)
+            message = hotkey.configure(modifiers, virtual_key, label)
+            if message:
+                self._notify(message)
 
     def _register_hotkey(self):
         # WM_HOTKEY is delivered on the GUI thread, so the signal is emitted
@@ -535,13 +538,15 @@ class ProSnipApp:
         self._server = None
 
     def _quit(self):
+        from PyQt6.QtWidgets import QMessageBox
+        for box in QApplication.topLevelWidgets():
+            if isinstance(box, QMessageBox):
+                box.reject()
         for editor in self._living_editors():
+            editor._prompt_on_close = False
+            editor._force_close = True
+            editor.autosave_all()
             editor.close()
-            try:
-                if editor.isVisible():
-                    return
-            except RuntimeError:
-                continue
         if self._main_window is not None:
             self._main_window.allow_close()
             self._main_window.close()

@@ -6,8 +6,10 @@ including a 150% scale factor and a monitor that lives at a negative origin.
 """
 
 import ctypes
+import json
 import logging
 import os
+import time
 import queue
 import sys
 import tempfile
@@ -32,12 +34,13 @@ from PIL import Image
 import canvas
 import capture
 import editor
+editor.EditorWindow.prompt_on_close = False
 import hotkey
 import instance
 import items
 import main
 import main_window
-import toolbar
+from editor_bar import EditorBar
 
 
 def setUpModule():
@@ -349,7 +352,9 @@ class LauncherTests(unittest.TestCase):
         labels = [label.text() for label in window.findChildren(main_window.QLabel)]
         self.assertIn("ProSnip-Bob", labels)
         self.assertIn(f"Version {editor.APP_VERSION}", labels)
-        self.assertEqual(editor.APP_VERSION, editor.APP_VERSION)
+        script = ROOT / "scripts" / "write_version_info.py"
+        exec(compile(script.read_text(encoding="utf-8"), str(script), "exec"), {"__name__": "__main__", "__file__": str(script)})
+        self.assertIn(editor.APP_VERSION, (ROOT / "version_info.txt").read_text(encoding="utf-8"))
         self.assertEqual(window.new_capture_button.text(), "New Capture")
         self.assertEqual(window.quit_button.text(), "Quit")
         status = window.shortcut_label.text()
@@ -669,6 +674,8 @@ class AppTests(unittest.TestCase):
         build = (ROOT / "build.bat").read_text(encoding="utf-8")
         workflow = (ROOT / ".github" / "workflows" / "build-windows.yml").read_text(encoding="utf-8")
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        script = ROOT / "scripts" / "write_version_info.py"
+        exec(compile(script.read_text(encoding="utf-8"), str(script), "exec"), {"__name__": "__main__", "__file__": str(script)})
         version = (ROOT / "version_info.txt").read_text(encoding="utf-8")
         command = (
             "pyinstaller --noconfirm --clean --onedir --windowed --noupx "
@@ -735,17 +742,19 @@ class AppTests(unittest.TestCase):
 
 class ColourAndPenTests(unittest.TestCase):
     def test_toolbar_buttons_use_tooltips_not_captions(self):
-        bar = toolbar.ToolBar()
-        arrow = bar._tool_buttons["arrow"]
-        pen = bar._tool_buttons["pen"]
-        self.assertEqual(arrow.text(), "")
-        self.assertEqual(pen.text(), "")
-        self.assertEqual(arrow.toolTip(), "Arrow (A)")
-        self.assertEqual(pen.toolTip(), "Pen (P)")
-        self.assertEqual(bar._tool_buttons["highlight"].toolTip(), "Highlighter (H)")
-        self.assertIn("QToolTip", bar.styleSheet())
-        self.assertIn("font-size: 12pt", bar.styleSheet())
-        self.assertIn("color: #ffffff", bar.styleSheet())
+        from colour import ColourHistory
+        bar = EditorBar(ColourHistory())
+        bar._relayout(1400)
+        arrow = bar.button("arrow")
+        pen = bar.button("pen")
+        if pen is None:
+            bar.set_tool("pen")
+            pen = bar.button("pen")
+        self.assertIsNotNone(arrow)
+        self.assertIsNotNone(pen)
+        self.assertIn("Arrow", arrow.toolTip())
+        self.assertIn("Pen", pen.toolTip())
+        self.assertFalse(arrow.icon().isNull())
 
     def test_style_menu_shows_swatches_and_light_text(self):
         from styles import STYLES, colour_swatch
@@ -771,7 +780,7 @@ class ColourAndPenTests(unittest.TestCase):
 
         scene = canvas.ProSnipScene()
         options = ToolOptions()
-        options.bind(scene, toolbar.ToolBar())
+        options.bind(scene, None)
         options.apply_named_style("Blue")
         self.assertEqual(scene._pen_color.name(), STYLES["Blue"].pen_color.name())
 
@@ -804,7 +813,7 @@ class ColourAndPenTests(unittest.TestCase):
             self.assertIn("Transparent", tips)
             self.assertIn("Transparent", labels)
             scene = canvas.ProSnipScene()
-            options.bind(scene, toolbar.ToolBar())
+            options.bind(scene, None)
             self.assertEqual(scene._fill_color.alpha(), 0)
             scene.set_tool("rect")
             scene.mousePressEvent(_Event(10, 12))
@@ -1119,6 +1128,8 @@ class EditorLayoutTests(unittest.TestCase):
                 (colours["muted"], colours["window"]),
                 (colours["muted"], colours["panel"]),
                 ("#ffffff", colours["accent"]),
+                (colours["tray_text"], colours["tray_fill"]),
+                (colours["text"], colours["panel"]),
             ):
                 self.assertGreaterEqual(
                     contrast_ratio(QColor(foreground), QColor(background)),
@@ -1256,12 +1267,14 @@ class ColourFormatTests(unittest.TestCase):
         self.assertLess(flipped[1], 280)
 
     def test_toolbar_uses_large_icons_and_names_the_picker(self):
-        bar = toolbar.ToolBar()
-        picker = bar._tool_buttons["screenpick"]
+        from colour import ColourHistory
+        bar = EditorBar(ColourHistory())
+        bar.set_tool("screenpick")
+        picker = bar.button("screenpick")
+        self.assertIsNotNone(picker)
         self.assertLessEqual(picker.iconSize().width(), 32)
         self.assertGreaterEqual(picker.width(), 28)
-        self.assertEqual(picker.toolTip(), "Colour picker (I)")
-        self.assertIn("QToolTip", bar.styleSheet())
+        self.assertIn("colour", picker.toolTip().lower())
 
 
 class Phase181Tests(unittest.TestCase):
@@ -1517,7 +1530,7 @@ class Quality182Tests(unittest.TestCase):
                 self.addCleanup(tray.deleteLater)
                 self.assertEqual(tray.card_count(), 0)
                 tray._pin(folder / "broken.json")
-                tray._delete(folder / "list.json")
+                tray._hide(folder / "list.json")
         finally:
             if previous is None:
                 os.environ.pop("LOCALAPPDATA", None)
@@ -1581,6 +1594,182 @@ class Quality182Tests(unittest.TestCase):
                 os.environ.pop("LOCALAPPDATA", None)
             else:
                 os.environ["LOCALAPPDATA"] = previous
+
+
+class Quality183Tests(unittest.TestCase):
+    def test_close_and_reopen_keeps_every_item_and_the_crop(self):
+        import tempfile
+
+        previous = os.environ.get("LOCALAPPDATA")
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                os.environ["LOCALAPPDATA"] = tmp
+                window = editor.EditorWindow(Image.new("RGB", (200, 100), "white"))
+                window._prompt_on_close = False
+                scene = window._scene
+                first = items.RectItem(QRectF(60, 10, 20, 16), QColor("#e00000"), QColor(224, 0, 0, 40), 2)
+                second = items.RectItem(QRectF(90, 10, 20, 16), QColor("#3949ab"), QColor(0, 0, 0, 0), 2)
+                scene.addItem(first)
+                scene.addItem(second)
+                first.setSelected(True)
+                second.setSelected(True)
+                group = scene.group_selected()
+                self.assertIsNotNone(group)
+                pix = QPixmap(12, 8)
+                pix.fill(QColor("#111111"))
+                scene.addItem(items.ImageOverlayItem(pix, QPointF(8, 8)))
+                scene.addItem(items.EllipseItem(QRectF(4, 40, 18, 12), QColor("#111"), QColor(0, 0, 0, 0), 1))
+                scene.addItem(items.ArrowItem(QPointF(4, 70), QPointF(40, 80), QColor("#111"), 2, "curved"))
+                scene.addItem(items.TextItem("Note", QPointF(50, 60), QColor("#111"), 12))
+                scene.addItem(items.NumberItem(2, QPointF(120, 40), QColor("#e00000")))
+                stroke = items.StrokeItem(QColor("#111"), 2)
+                stroke.add_point(QPointF(140, 70))
+                stroke.add_point(QPointF(170, 80))
+                scene.addItem(stroke)
+                scene.addItem(items.PolygonItem(
+                    [QPointF(0, 0), QPointF(10, 0), QPointF(5, 8)], QColor("#111"), QColor(0, 0, 0, 0), 1,
+                ))
+                scene.addItem(items.SpotlightItem(QRectF(150, 10, 30, 20), 100))
+                scene.addItem(items.BlurItem(QRectF(150, 40, 20, 12), 4))
+                scene.addItem(items.StampItem("ok", QPointF(150, 70)))
+                window._on_crop_requested(QRectF(50, 0, 150, 100))
+                self.assertEqual(window._pil_image.size, (150, 100))
+                path = window._active_path
+                window.autosave_active()
+                window.close()
+                again = editor.EditorWindow(Image.new("RGB", (20, 20), "black"))
+                again._prompt_on_close = False
+                again._open_recent(path)
+                self.assertEqual(again._pil_image.size, (150, 100))
+                kinds = {item.__class__.__name__ for item in again._scene.items()}
+                for name in (
+                    "QGraphicsItemGroup", "RectItem", "ImageOverlayItem", "EllipseItem", "ArrowItem",
+                    "TextItem", "NumberItem", "StrokeItem", "PolygonItem", "SpotlightItem",
+                    "BlurItem", "StampItem",
+                ):
+                    self.assertIn(name, kinds)
+                again.close()
+        finally:
+            if previous is None:
+                os.environ.pop("LOCALAPPDATA", None)
+            else:
+                os.environ["LOCALAPPDATA"] = previous
+
+    def test_hide_keeps_files_and_delete_leaves_the_library(self):
+        import tempfile
+
+        previous = os.environ.get("LOCALAPPDATA")
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                os.environ["LOCALAPPDATA"] = tmp
+                from recents import RecentTray, library_dir
+                tray = RecentTray()
+                path = tray.remember(Image.new("RGB", (8, 8), "red"), "keep")
+                self.assertTrue(Path(path).is_file())
+                meta = Path(path).with_suffix(".json")
+                tray._hide(meta)
+                self.assertTrue(Path(path).is_file())
+                self.assertEqual(tray.card_count(), 0)
+                tray.recycle_capture(path)
+                self.assertFalse(Path(path).is_file())
+                self.assertFalse(meta.is_file())
+                self.assertFalse(any(library_dir().glob("keep*")))
+        finally:
+            if previous is None:
+                os.environ.pop("LOCALAPPDATA", None)
+            else:
+                os.environ["LOCALAPPDATA"] = previous
+
+    def test_pinned_capture_survives_retention(self):
+        import tempfile
+
+        previous = os.environ.get("LOCALAPPDATA")
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                os.environ["LOCALAPPDATA"] = tmp
+                from recents import library_dir, purge_expired
+                folder = library_dir()
+                old = time.time() - 10 * 86400
+                for name, pinned in (("pinned", True), ("loose", False)):
+                    image = folder / f"{name}.png"
+                    Image.new("RGB", (4, 4), "red").save(image)
+                    (folder / f"{name}.json").write_text(json.dumps({
+                        "title": name, "pinned": pinned, "path": str(image), "created": old,
+                    }), encoding="utf-8")
+                (folder / "escape.json").write_text(json.dumps({
+                    "title": "out", "pinned": False, "path": str(Path(tmp) / "outside.png"), "created": old,
+                }), encoding="utf-8")
+                Path(tmp, "outside.png").write_bytes(b"no")
+                purge_expired(1)
+                self.assertTrue((folder / "pinned.png").is_file())
+                self.assertFalse((folder / "loose.png").is_file())
+                self.assertTrue(Path(tmp, "outside.png").is_file())
+        finally:
+            if previous is None:
+                os.environ.pop("LOCALAPPDATA", None)
+            else:
+                os.environ["LOCALAPPDATA"] = previous
+
+    def test_save_clears_the_dirty_flag(self):
+        window = editor.EditorWindow(Image.new("RGB", (20, 12), "white"))
+        self.addCleanup(window.close)
+        window._prompt_on_close = False
+        window._dirty = True
+        original = editor.QFileDialog.getSaveFileName
+        original_save = editor.QImage.save
+        editor.QFileDialog.getSaveFileName = staticmethod(lambda *args: ("/tmp/prosnip-save.png", ""))
+        editor.QImage.save = lambda self, *args, **kwargs: True
+        try:
+            self.assertTrue(window._save_png())
+            self.assertFalse(window._dirty)
+        finally:
+            editor.QFileDialog.getSaveFileName = original
+            editor.QImage.save = original_save
+
+    def test_autosave_replaces_a_temp_file(self):
+        import tempfile
+
+        previous = os.environ.get("LOCALAPPDATA")
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                os.environ["LOCALAPPDATA"] = tmp
+                window = editor.EditorWindow(Image.new("RGB", (30, 16), "blue"))
+                window._prompt_on_close = False
+                window._scene.addItem(items.RectItem(QRectF(1, 1, 4, 4), QColor("#111"), QColor(0, 0, 0, 0), 1))
+                window.autosave_active()
+                path = Path(window._active_path)
+                self.assertTrue(path.is_file())
+                self.assertTrue(path.with_suffix(".psnip").is_file())
+                self.assertFalse(Path(str(path) + ".tmp").exists())
+                self.assertFalse(Path(str(path.with_suffix(".psnip")) + ".tmp").exists())
+                window.close()
+        finally:
+            if previous is None:
+                os.environ.pop("LOCALAPPDATA", None)
+            else:
+                os.environ["LOCALAPPDATA"] = previous
+
+    def test_checkbox_indicator_is_visible_in_both_themes(self):
+        from PyQt6.QtWidgets import QCheckBox
+        from theme import apply_theme
+
+        for mode in ("light", "dark"):
+            apply_theme(mode)
+            box = QCheckBox("Shadow")
+            box.setChecked(True)
+            box.resize(80, 24)
+            image = box.grab().toImage()
+            found = False
+            for y in range(image.height()):
+                for x in range(image.width()):
+                    colour = image.pixelColor(x, y)
+                    if abs(colour.red() - 79) < 40 and colour.blue() > 160 and colour.green() < 120:
+                        found = True
+                        break
+                if found:
+                    break
+            self.assertTrue(found, mode)
+            box.deleteLater()
 
 
 if __name__ == "__main__":

@@ -98,9 +98,9 @@ That runs:
 pyinstaller --noconfirm --clean --onedir --windowed --noupx --name ProSnip-Bob --exclude-module tkinter --version-file version_info.txt --add-data "LICENSE;." --add-data "THIRD_PARTY_NOTICES;." src/main.py
 ```
 
-Output: `dist/ProSnip-Bob/`, containing `ProSnip-Bob.exe` and `_internal`. Run `ProSnip-Bob.exe` from that folder. The executable needs `_internal` beside it. Version information in the executable names the product ProSnip-Bob, version 1.8.2.0. UPX is not used.
+Output: `dist/ProSnip-Bob/`, containing `ProSnip-Bob.exe` and `_internal`. Run `ProSnip-Bob.exe` from that folder. The executable needs `_internal` beside it. Version information in the executable names the product ProSnip-Bob, version 1.8.3.0. UPX is not used.
 
-GitHub Actions (`.github/workflows/build-windows.yml`) builds the same executable on `windows-latest` when `prosnip-bob` is pushed, and when the workflow is run by hand. It reads `APP_VERSION` from `src/editor.py`, checks that it matches the FileVersion and ProductVersion embedded in the executable, then publishes the folder and the zip as `ProSnip-Bob-<version>-win64` (for example `ProSnip-Bob-1.8.2.0-win64`). The executable inside that folder is still `ProSnip-Bob.exe`.
+GitHub Actions (`.github/workflows/build-windows.yml`) builds the same executable on `windows-latest` when `prosnip-bob` is pushed, and when the workflow is run by hand. It reads `APP_VERSION` from `src/editor.py`, checks that it matches the FileVersion and ProductVersion embedded in the executable, then publishes the folder and the zip as `ProSnip-Bob-<version>-win64` (for example `ProSnip-Bob-1.8.3.0-win64`). The executable inside that folder is still `ProSnip-Bob.exe`.
 
 ProSnip-Bob is not code-signed. Windows SmartScreen may warn the first time you run it. If you trust the build, choose More info and then Run anyway. Antivirus software may also warn about a new unsigned application. The build does not use a packer, and it does not install a low-level keyboard hook.
 
@@ -118,7 +118,6 @@ ProSnip-Bob/
 │   ├── capture.py       # Per-monitor capture overlay
 │   ├── editor.py        # Main editor window
 │   ├── canvas.py        # QGraphicsScene + QGraphicsView
-│   ├── toolbar.py       # Vertical tool panel
 │   ├── items.py         # Annotation graphics items
 │   ├── stamp_picker.py  # Emoji stamp picker dialog
 │   └── styles.py        # Style Preset definitions
@@ -126,7 +125,7 @@ ProSnip-Bob/
 │   └── test_prosnip_bob.py
 ├── .github/workflows/build-windows.yml
 ├── requirements.txt
-├── version_info.txt     # Windows version resource
+├── scripts/write_version_info.py  # writes version_info.txt at build time
 ├── build.bat
 └── README.md
 ```

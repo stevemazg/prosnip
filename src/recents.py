@@ -2,6 +2,7 @@
 
 import json
 import logging
+import sys
 import time
 from pathlib import Path
 
@@ -35,15 +36,26 @@ def purge_expired(days: int) -> None:
             created = float(meta.get("created") or meta_path.stat().st_mtime)
         except Exception:
             continue
-        if created >= cutoff:
+        if created >= cutoff or meta.get("pinned"):
             continue
         image = Path(str(meta.get("path") or ""))
         for path in (meta_path, image, meta_path.with_suffix(".psnip")):
+            if not _inside_library(path):
+                log.error("Refusing to purge %s; it is outside the library", path)
+                continue
             try:
                 if path.is_file():
                     path.unlink()
             except OSError:
                 log.exception("Could not delete %s", path)
+
+
+def _inside_library(path: Path) -> bool:
+    try:
+        path.resolve().relative_to(library_dir().resolve())
+    except (OSError, ValueError):
+        return False
+    return True
 
 
 def library_dir() -> Path:
@@ -55,9 +67,51 @@ def library_dir() -> Path:
     return folder
 
 
+def recycle_file(path: Path) -> bool:
+    """Move a file to the Windows Recycle Bin, or to the desktop trash elsewhere."""
+    if not path.is_file():
+        return True
+    if sys.platform == "win32":
+        return _windows_recycle(path)
+    trash = Path.home() / ".local" / "share" / "Trash" / "files"
+    trash.mkdir(parents=True, exist_ok=True)
+    dest = trash / path.name
+    index = 1
+    while dest.exists():
+        dest = trash / f"{path.stem}-{index}{path.suffix}"
+        index += 1
+    path.replace(dest)
+    return True
+
+
+def _windows_recycle(path: Path) -> bool:
+    import ctypes
+    from ctypes import wintypes
+
+    class _Op(ctypes.Structure):
+        _fields_ = [
+            ("hwnd", wintypes.HWND),
+            ("wFunc", ctypes.c_uint),
+            ("pFrom", ctypes.c_wchar_p),
+            ("pTo", ctypes.c_wchar_p),
+            ("fFlags", ctypes.c_ushort),
+            ("fAnyOperationsAborted", wintypes.BOOL),
+            ("hNameMappings", ctypes.c_void_p),
+            ("lpszProgressTitle", ctypes.c_wchar_p),
+        ]
+
+    operation = _Op()
+    operation.wFunc = 3
+    operation.pFrom = str(path) + "\0\0"
+    operation.fFlags = 0x40 | 0x10 | 0x4
+    result = ctypes.windll.shell32.SHFileOperationW(ctypes.byref(operation))
+    return result == 0 and not operation.fAnyOperationsAborted
+
+
 class RecentTray(QWidget):
     opened = pyqtSignal(str)
     dropped_on_canvas = pyqtSignal(str)
+    delete_requested = pyqtSignal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -65,6 +119,7 @@ class RecentTray(QWidget):
         self.setFixedHeight(TRAY_H)
         self._selected = set()
         self._current = ""
+        self._mode = "light"
         outer = QVBoxLayout(self)
         outer.setContentsMargins(6, 4, 6, 4)
         outer.setSpacing(0)
@@ -164,10 +219,17 @@ class RecentTray(QWidget):
                 continue
             selected = bool(path) and card.property("imagePath") == path
             card.setProperty("selected", selected)
+            from theme import colours_for
+
+            colours = colours_for(self._mode)
+            fill = colours["tray_fill"]
+            text = colours["tray_text"]
             card.setStyleSheet(
-                "QWidget#RecentCard { background-color: #c7d2fe; border: 3px solid #3730a3; }"
+                f"QWidget#RecentCard {{ background-color: {fill}; border: 3px solid {colours['accent']}; }}"
+                f"QLabel#RecentCaption {{ color: {text}; background: transparent; }}"
                 if selected
                 else "QWidget#RecentCard { background-color: transparent; border: 3px solid transparent; }"
+                "QLabel#RecentCaption { color: palette(window-text); background: transparent; }"
             )
             if selected:
                 chosen = card
@@ -181,7 +243,8 @@ class RecentTray(QWidget):
         if not pix.isNull():
             card.set_pixmap(pix)
         card.pin_clicked.connect(lambda source=meta_path: self._pin(source))
-        card.close_clicked.connect(lambda source=meta_path: self._delete(source))
+        card.close_clicked.connect(lambda source=meta_path: self._hide(source))
+        card.delete_requested.connect(self.delete_requested.emit)
         card.activated.connect(self.opened.emit)
         if meta.get("pinned"):
             card._pin.setText("●")
@@ -201,19 +264,41 @@ class RecentTray(QWidget):
             log.exception("Could not update %s", meta_path)
         self.reload()
 
-    def _delete(self, meta_path: Path):
+    def set_theme_mode(self, mode: str):
+        self._mode = "dark" if mode == "dark" else "light"
+        self.mark_selected(self._current)
+
+    def first_path(self) -> str:
+        for index in range(self._row.count()):
+            card = self._row.itemAt(index).widget()
+            if card is not None and not sip.isdeleted(card):
+                return str(card.property("imagePath") or "")
+        return ""
+
+    def _hide(self, meta_path: Path):
         try:
             meta = json.loads(meta_path.read_text(encoding="utf-8"))
-            image = Path(meta.get("path") or "")
+            if not isinstance(meta, dict):
+                raise ValueError("tray entry is not an object")
+            meta["hidden"] = True
+            meta_path.write_text(json.dumps(meta), encoding="utf-8")
         except Exception:
             log.exception("Skipping damaged tray file %s", meta_path)
-            image = meta_path.with_suffix(".png")
-        for path in (meta_path, image, meta_path.with_suffix(".psnip")):
+            return
+        self.reload()
+
+    def recycle_capture(self, image_path: str):
+        meta_path = Path(image_path).with_suffix(".json")
+        for path in (Path(image_path), meta_path, meta_path.with_suffix(".psnip")):
+            if path.is_file() and not _inside_library(path):
+                log.error("Refusing to recycle %s; it is outside the library", path)
+                continue
             try:
-                if path.is_file():
-                    path.unlink()
+                recycle_file(path)
             except OSError:
-                log.exception("Could not delete %s", path)
+                log.exception("Could not recycle %s", path)
+        if self._current == image_path:
+            self._current = ""
         self.reload()
 
     def _pin(self, meta_path: Path):
@@ -240,11 +325,14 @@ class RecentCard(QWidget):
     activated = pyqtSignal(str)
     pin_clicked = pyqtSignal()
     close_clicked = pyqtSignal()
+    delete_requested = pyqtSignal(str)
 
     def __init__(self, path: str, title: str, parent=None):
         super().__init__(parent)
         self._path = path
         self.setObjectName("RecentCard")
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._menu)
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setFixedSize(CARD_W, CARD_H)
         layout = QVBoxLayout(self)
@@ -300,6 +388,12 @@ class RecentCard(QWidget):
         if self._alive(self._close):
             self._close.hide()
         super().leaveEvent(event)
+
+    def _menu(self, pos):
+        from PyQt6.QtWidgets import QMenu
+        menu = QMenu(self)
+        menu.addAction("Delete", lambda: self.delete_requested.emit(self._path))
+        menu.exec(self.mapToGlobal(pos))
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton and self._path:

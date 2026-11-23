@@ -44,6 +44,10 @@ def parse_hotkey(text: str) -> tuple[int, int | None]:
             modifiers |= MOD_SHIFT
         elif token == "alt":
             modifiers |= MOD_ALT
+        elif token.startswith("f") and token[1:].isdigit() and 1 <= int(token[1:]) <= 24:
+            virtual_key = 0x70 + int(token[1:]) - 1
+        elif token in {"printscreen", "prtsc", "print"}:
+            virtual_key = 0x2C
         elif len(token) == 1 and token.isalpha():
             virtual_key = ord(token.upper())
     return modifiers, virtual_key
@@ -178,7 +182,7 @@ class GlobalHotkey:
             "Use the tray icon to capture."
         )
         self._unavailable_message = f"{label} is only available on Windows. Use the tray icon to capture."
-        if was and app is not None:
+        if app is not None:
             return self.register(app)
         return None
 

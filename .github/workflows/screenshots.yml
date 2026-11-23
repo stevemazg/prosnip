@@ -44,9 +44,9 @@ jobs:
           $proc = Start-Process -FilePath ".\dist\ProSnip-Bob-Demo\ProSnip-Bob-Demo.exe" -ArgumentList "$PWD\screenshots" -Wait -PassThru
           Write-Host "demo exit: $($proc.ExitCode)"
           Get-ChildItem -Path screenshots | Format-Table Name, Length
-          if (Test-Path .\dist\ProSnip-Bob\ProSnip-Bob.log) {
+          if (Test-Path .\dist\ProSnip-Bob-Demo\ProSnip-Bob.log) {
             Write-Host "----- ProSnip-Bob.log -----"
-            Get-Content .\dist\ProSnip-Bob\ProSnip-Bob.log -Tail 120
+            Get-Content .\dist\ProSnip-Bob-Demo\ProSnip-Bob.log -Tail 120
           }
           if (Test-Path .\screenshots\fault.log) {
             Write-Host "----- fault.log -----"
@@ -95,7 +95,11 @@ jobs:
             "43-three-captures.png",
             "44-close-prompt.png",
             "45-four-captures.png",
-            "46-dark-accent.png"
+            "46-dark-accent.png",
+            "47-checks-light.png",
+            "48-checks-dark.png",
+            "49-delete-confirm.png",
+            "50-reopen-group.png"
           )) {
             $file = Join-Path screenshots $name
             if (-not (Test-Path $file)) { throw "Missing $name" }

@@ -34,7 +34,10 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
-          .venv\Scripts\python.exe -c "import sys; sys.path.insert(0, 'src'); import capture, editor, canvas, items, toolbar, stamp_picker, styles, hotkey, instance, main_window, colour, colour_picker, main"
+          .venv\Scripts\python.exe -c "import sys; sys.path.insert(0, 'src'); import capture, editor, canvas, items, stamp_picker, styles, hotkey, instance, main_window, colour, colour_picker, main"
+
+      - name: Write version_info.txt
+        run: .venv\Scripts\python.exe scripts/write_version_info.py
 
       - name: Run the test suite
         env:
@@ -42,9 +45,6 @@ jobs:
         run: |
           .venv\Scripts\python.exe -m unittest tests.test_prosnip_bob
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-      - name: Write version_info.txt
-        run: .venv\Scripts\python.exe scripts/write_version_info.py
 
       - name: Read application version
         id: version

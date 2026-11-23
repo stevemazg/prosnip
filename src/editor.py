@@ -34,7 +34,7 @@ from PIL import Image, ImageOps
 log = logging.getLogger("prosnip")
 
 APP_NAME = "ProSnip-Bob"
-APP_VERSION = "1.8.2.0"
+APP_VERSION = "1.8.3.0"
 
 
 def clamp_crop_rect(rect: QRectF, width: int, height: int) -> QRect | None:
@@ -140,6 +140,7 @@ class EditorWindow(QMainWindow):
     screen_pick_requested = pyqtSignal()
     new_capture_requested = pyqtSignal()
     preferences_changed = pyqtSignal()
+    prompt_on_close = True
 
     def __init__(self, pil_image: Image.Image, parent=None):
         super().__init__(parent)
@@ -154,16 +155,17 @@ class EditorWindow(QMainWindow):
         self._documents = {}
         self._active_path = None
         self._dirty = False
+        self._dirty_paths = set()
+        self._full_order = []
         self._temp_files = []
-        self._prompt_on_close = (
-            os.environ.get("PROSNIP_AUTOCLOSE") != "1"
-            and os.environ.get("QT_QPA_PLATFORM") != "offscreen"
-        )
+        self._autosave_warned = False
+        self._prompt_on_close = True
         self._scene = ProSnipScene()
         self._view = ProSnipView(self._scene)
 
         self._history = ColourHistory()
         self._swatches = SwatchBook(self._history.path)
+        self._prompt_on_close = self.prompt_on_close and bool(self._history.confirm_close)
         self._theme = apply_theme(self._history.theme)
         self._setup_background()
         self._setup_ui()
@@ -379,14 +381,15 @@ class EditorWindow(QMainWindow):
         self._stash_active()
         self._active_path = path
         document = self._documents.get(path)
-        if document is not None:
+        if document is not None and document.get("annotations") is not None and document.get("image") is not None:
             image = document["image"]
             self._replace_pixmap(pil_to_qpixmap(image), image)
             for item in document["annotations"]:
                 self._scene.addItem(item)
-            self._scene._undo_stack = list(document["undo"])
-            self._scene._redo_stack = list(document["redo"])
-            self._scene.set_next_number(document["next"])
+            self._scene._undo_stack = list(document.get("undo") or [])
+            self._scene._redo_stack = list(document.get("redo") or [])
+            self._scene.set_next_number(document.get("next") or 1)
+            self._dirty = path in self._dirty_paths
         else:
             try:
                 image = Image.open(path).convert("RGB")
@@ -405,6 +408,8 @@ class EditorWindow(QMainWindow):
                 self._scene.set_next_number(nxt)
             else:
                 self._scene.sync_next_number()
+            self._dirty = path in self._dirty_paths
+        self._remember_full(path)
         self._tray.mark_selected(path)
         self._show_library(False)
         self.raise_()
@@ -430,7 +435,9 @@ class EditorWindow(QMainWindow):
         self._scene._redo_stack.clear()
         self._scene.sync_next_number()
         self._filename = None
-        self._dirty = False
+        self._dirty = True
+        if self._active_path:
+            self._dirty_paths.add(self._active_path)
         self.setWindowTitle(f"{APP_NAME} — Untitled")
         self._remember_capture(title)
         self._tray.set_unsaved(self._active_path, True)
@@ -454,7 +461,11 @@ class EditorWindow(QMainWindow):
             "redo": list(self._scene._redo_stack),
             "next": self._scene._next_number,
         }
-        self._write_document(path, annotations)
+        if self._dirty:
+            self._dirty_paths.add(path)
+        self._write_document(path, annotations, self._pil_image)
+        self._remember_full(path)
+        self._trim_documents()
         self._scene._undo_stack.clear()
         self._scene._redo_stack.clear()
 
@@ -492,6 +503,8 @@ class EditorWindow(QMainWindow):
         self._view.setStyleSheet(f"background-color: {colours['workspace']}; border: none;")
         from PyQt6.QtGui import QBrush
         self._view.setBackgroundBrush(QBrush(QColor(colours["workspace"])))
+        if getattr(self, "_tray", None) is not None:
+            self._tray.set_theme_mode(self._theme)
         if getattr(self, "_splitter", None) is not None:
             self._splitter.setHandleWidth(1)
             self._splitter.setChildrenCollapsible(False)
@@ -579,7 +592,7 @@ class EditorWindow(QMainWindow):
         view.addAction("Zoom in", lambda: self._view.scale(1.15, 1.15))
         view.addAction("Zoom out", lambda: self._view.scale(1 / 1.15, 1 / 1.15))
         fit = view.addAction("Fit")
-        fit.setShortcut(QKeySequence("Ctrl+9"))
+        fit.setShortcut(QKeySequence("Ctrl+Shift+0"))
         fit.triggered.connect(self._view.fit_scene)
         actual = view.addAction("Actual size")
         actual.setShortcut(QKeySequence("Ctrl+0"))
@@ -649,7 +662,7 @@ class EditorWindow(QMainWindow):
             self._history.set_hotkeys(capture_key.text(), pick_key.text())
             self._history.set_retention(retention.value())
             self._history.set_confirm_close(confirm.isChecked())
-            self._prompt_on_close = bool(confirm.isChecked()) and os.environ.get("QT_QPA_PLATFORM") != "offscreen"
+            self._prompt_on_close = self.prompt_on_close and bool(confirm.isChecked())
             self.preferences_changed.emit()
 
     def _select_all(self):
@@ -740,13 +753,20 @@ class EditorWindow(QMainWindow):
         self._view.setBackgroundBrush(QBrush(QColor(value)))
 
     def closeEvent(self, event):
-        if self._prompt_on_close and self._has_unsaved_work():
+        if getattr(self, "_force_close", False):
+            self.autosave_all()
+        elif self._prompt_on_close and self._dirty:
             box = self._close_box()
             box.exec()
-            if box.clickedButton() is box.button(QMessageBox.StandardButton.Cancel):
+            clicked = box.clickedButton()
+            if clicked is None or clicked is self._btn_cancel:
                 event.ignore()
                 return
-            if box.clickedButton() is box.button(QMessageBox.StandardButton.Save):
+            if clicked is self._btn_save:
+                if not self._save_png():
+                    event.ignore()
+                    return
+            elif clicked is self._btn_keep:
                 self.autosave_active()
         else:
             self.autosave_active()
@@ -762,34 +782,92 @@ class EditorWindow(QMainWindow):
         box = QMessageBox(self)
         box.setIcon(QMessageBox.Icon.Question)
         box.setWindowTitle(APP_NAME)
-        box.setText("Save annotations before closing?")
-        box.setStandardButtons(
-            QMessageBox.StandardButton.Save
-            | QMessageBox.StandardButton.Discard
-            | QMessageBox.StandardButton.Cancel
-        )
+        box.setText("This capture has unsaved changes.")
+        self._btn_save = box.addButton("Save", QMessageBox.ButtonRole.AcceptRole)
+        self._btn_keep = box.addButton("Keep for later", QMessageBox.ButtonRole.ActionRole)
+        self._btn_discard = box.addButton("Discard", QMessageBox.ButtonRole.DestructiveRole)
+        self._btn_cancel = box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
         return box
 
     def _has_unsaved_work(self) -> bool:
-        return bool(self._scene._annotations()) or bool(self._scene._undo_stack) or self._dirty
+        return bool(self._dirty)
+
+    def _mark_dirty(self, *_args):
+        self._dirty = True
+        if self._active_path:
+            self._dirty_paths.add(self._active_path)
 
     def autosave_active(self):
         if self._active_path:
-            self._write_document(self._active_path, self._scene._annotations())
+            self._write_document(self._active_path, self._scene._annotations(), self._pil_image)
 
-    def _write_document(self, path: str, annotations=None):
+    def autosave_all(self):
+        self.autosave_active()
+        for path, document in list(self._documents.items()):
+            image = document.get("image")
+            annotations = document.get("annotations")
+            if image is None or annotations is None:
+                continue
+            self._write_document(path, annotations, image, document.get("next") or 1)
+
+    def _write_document(self, path: str, annotations=None, image=None, next_number=None):
         from persist import write_psnip
 
         if not path:
             return
         rows = self._scene._annotations() if annotations is None else annotations
+        picture = self._pil_image if image is None else image
         try:
-            write_psnip(path, rows, self._scene._next_number)
-        except OSError:
+            write_psnip(path, rows, self._scene._next_number if next_number is None else next_number, picture)
+        except Exception:
             log.exception("Could not autosave %s", path)
+            if not self._autosave_warned:
+                self._autosave_warned = True
+                QMessageBox.warning(self, "Autosave", f"Could not autosave\n{path}")
+
+    def _remember_full(self, path: str):
+        if path in self._full_order:
+            self._full_order.remove(path)
+        self._full_order.append(path)
+
+    def _trim_documents(self):
+        keep = set(self._full_order[-4:])
+        if self._active_path:
+            keep.add(self._active_path)
+        for path, document in list(self._documents.items()):
+            if path in keep or document.get("annotations") is None:
+                continue
+            self._documents[path] = {"saved": True}
 
     def _release_documents(self):
         self._documents.clear()
+
+    def _confirm_delete_capture(self, path: str):
+        if not path:
+            return
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle("Delete capture")
+        box.setText("Delete this capture? The files go to the Recycle Bin.")
+        box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        box.exec()
+        if box.clickedButton() is not box.button(QMessageBox.StandardButton.Yes):
+            return
+        self._documents.pop(path, None)
+        self._dirty_paths.discard(path)
+        was_active = path == self._active_path
+        if was_active:
+            self._active_path = None
+            self._detach_annotations()
+        self._tray.recycle_capture(path)
+        if was_active:
+            nxt = self._tray.first_path()
+            if nxt:
+                self._open_recent(nxt)
+            else:
+                blank = Image.new("RGB", (960, 540), "#ffffff")
+                self._replace_pixmap(pil_to_qpixmap(blank), blank)
+                self._dirty = False
 
     def show_close_prompt(self) -> QMessageBox:
         box = self._close_box()
@@ -882,6 +960,8 @@ class EditorWindow(QMainWindow):
         self._options.screen_pick_requested.connect(self.screen_pick_requested.emit)
         self._scene.selectionChanged.connect(self._refresh_status_tool)
         self._scene.image_changed.connect(self._on_image_changed)
+        self._scene.tool_used.connect(self._mark_dirty)
+        self._tray.delete_requested.connect(self._confirm_delete_capture)
 
     def _actual_size(self):
         self._view.resetTransform()
@@ -996,7 +1076,8 @@ class EditorWindow(QMainWindow):
             "PNG Images (*.png)"
         )
         if path:
-            self._write_saved_image(path, "PNG")
+            return self._write_saved_image(path, "PNG")
+        return False
 
     def _save_jpg(self):
         path, _ = QFileDialog.getSaveFileName(
@@ -1016,6 +1097,7 @@ class EditorWindow(QMainWindow):
         self._remember_save(path)
         self._dirty = False
         if self._active_path:
+            self._dirty_paths.discard(self._active_path)
             self._tray.set_unsaved(self._active_path, False)
             self.autosave_active()
         return True
