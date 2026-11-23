@@ -1,5 +1,7 @@
 name: Screenshots
 
+# The production executable does not include this harness. This job builds src/demo_main.py.
+
 on:
   workflow_dispatch:
   push:
