@@ -67,7 +67,7 @@ Filename: "{app}\{#AppExe}"; Description: "Launch ProSnip-Bob"; Flags: nowait po
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep = ssPostInstall then
-    SaveStringToFile(ExpandConstant('{app}\installed.txt'), "ProSnip-Bob" + #13#10, False);
+    SaveStringToFile(ExpandConstant('{app}\installed.txt'), 'ProSnip-Bob' + Chr(13) + Chr(10), False);
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
