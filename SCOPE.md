@@ -36,7 +36,7 @@ ProSnip is a lightweight Windows image capture and annotation tool. Images only 
 - Drag to position, resize handles
 - Use case: logo watermarks, inset screenshots, comparison overlays
 
-### 4. Quick Styles
+### 4. Style Presets
 - Preset colour/style themes (e.g. Red, Blue, Corporate, High Contrast)
 - One-click apply to all annotations
 - Custom style saved per user
@@ -87,7 +87,7 @@ ProSnip is a lightweight Windows image capture and annotation tool. Images only 
 | 2 | Canvas editor | Place, move, resize annotations |
 | 3 | Annotation tools | Arrow, text, callout, stamp, shape |
 | 4 | Picture on picture | Insert image overlay |
-| 5 | Quick styles | Preset themes |
+| 5 | Style Presets | Preset themes |
 | 6 | Output | Save / copy to clipboard |
 | 7 | Packaging | PyInstaller .exe build |
 
@@ -97,7 +97,7 @@ ProSnip is a lightweight Windows image capture and annotation tool. Images only 
 
 - Default save folder — Documents/ProSnip or user-chosen?
 - Stamp library — use defaults above or custom set?
-- Quick styles — how many presets to start with?
+- Style Presets — how many presets to start with?
 - Global hotkey — confirm default key combo
 - Branding — any logo / colour scheme for the app itself?
 

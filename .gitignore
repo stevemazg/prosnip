@@ -1,0 +1,7 @@
+__pycache__/
+*.py[cod]
+dist/
+build/
+*.spec
+ProSnip-Bob.log
+version_info.txt

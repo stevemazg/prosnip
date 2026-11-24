@@ -1,0 +1,139 @@
+name: Build ProSnip-Bob
+
+on:
+  push:
+    branches:
+      - prosnip-bob
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.12"
+
+      - name: Create virtual environment and install dependencies
+        run: |
+          python -m venv .venv
+          .venv\Scripts\python.exe -m pip install --upgrade pip
+          .venv\Scripts\python.exe -m pip install -r requirements.txt
+
+      - name: Smoke import
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          .venv\Scripts\python.exe -c "import sys; sys.path.insert(0, 'src'); import capture, editor, canvas, items, stamp_picker, styles, hotkey, instance, main_window, colour, colour_picker, main"
+
+      - name: Write version_info.txt
+        run: .venv\Scripts\python.exe scripts/write_version_info.py
+
+      - name: Run the test suite
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          .venv\Scripts\python.exe -m unittest tests.test_prosnip_bob
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Read application version
+        id: version
+        run: |
+          $editor = Get-Content -Raw -Path src/editor.py
+          $appVersion = [regex]::Match($editor, 'APP_VERSION\s*=\s*"([0-9]+(?:\.[0-9]+){3})"')
+          if (-not $appVersion.Success) { throw "APP_VERSION was not found in src/editor.py" }
+          $version = $appVersion.Groups[1].Value
+          $info = Get-Content -Raw -Path version_info.txt
+          $fileVersion = [regex]::Match($info, "StringStruct\('FileVersion',\s*'([^']+)'\)")
+          $productVersion = [regex]::Match($info, "StringStruct\('ProductVersion',\s*'([^']+)'\)")
+          if (-not $fileVersion.Success) { throw "FileVersion was not found in version_info.txt" }
+          if (-not $productVersion.Success) { throw "ProductVersion was not found in version_info.txt" }
+          if ($fileVersion.Groups[1].Value -ne $version -or $productVersion.Groups[1].Value -ne $version) {
+            throw "src/editor.py APP_VERSION $version does not match the version embedded in the executable (FileVersion $($fileVersion.Groups[1].Value), ProductVersion $($productVersion.Groups[1].Value))"
+          }
+          $name = "ProSnip-Bob-$version-win64"
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "version=$version" -Encoding utf8NoBOM
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "name=$name" -Encoding utf8NoBOM
+          Write-Host "Build download name: $name"
+
+      - name: Build executable
+        run: |
+          $env:Path = "$PWD\.venv\Scripts;$env:Path"
+          pyinstaller --noconfirm --clean --onedir --windowed --noupx --name ProSnip-Bob --exclude-module tkinter --version-file version_info.txt --add-data "LICENSE;." --add-data "THIRD_PARTY_NOTICES;." --add-data "assets/checkbox-tick.png;assets" --icon assets/prosnip-bob.ico src/main.py
+
+      - name: Zip application folder
+        run: |
+          $bundle = "${{ steps.version.outputs.name }}"
+          if ([string]::IsNullOrWhiteSpace($bundle)) { throw "The versioned bundle name is empty" }
+          if (-not (Test-Path dist\ProSnip-Bob\ProSnip-Bob.exe)) { throw "ProSnip-Bob.exe was not produced" }
+          if (-not (Test-Path dist\ProSnip-Bob\_internal)) { throw "The _internal folder is missing" }
+          if (Test-Path "dist\$bundle") { Remove-Item "dist\$bundle" -Recurse -Force }
+          Rename-Item -Path dist\ProSnip-Bob -NewName $bundle
+          if (-not (Test-Path "dist\$bundle\ProSnip-Bob.exe")) { throw "The renamed folder is missing ProSnip-Bob.exe" }
+          $zip = "dist\$bundle.zip"
+          if (Test-Path $zip) { Remove-Item $zip }
+          Compress-Archive -Path "dist\$bundle" -DestinationPath $zip
+          Write-Host "Zip contents:"
+          tar -tf $zip
+
+      - name: Build installer
+        run: |
+          choco install innosetup -y --no-progress
+          $bundle = "${{ steps.version.outputs.name }}"
+          $version = "${{ steps.version.outputs.version }}"
+          $iscc = @(
+            "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
+            "$env:ProgramFiles\Inno Setup 6\ISCC.exe"
+          ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $iscc) { throw "ISCC was not found" }
+          & $iscc "/DAppVersion=$version" "/DSourceDir=$PWD\dist\$bundle" "installer\prosnip.iss"
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed with $LASTEXITCODE" }
+          $setup = "dist\ProSnip-Bob-$version-Setup.exe"
+          if (-not (Test-Path $setup)) { throw "The setup executable was not produced" }
+
+      - name: Install, smoke test, and uninstall
+        run: |
+          $version = "${{ steps.version.outputs.version }}"
+          $setup = "dist\ProSnip-Bob-$version-Setup.exe"
+          $install = Start-Process -FilePath $setup -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/CURRENTUSER","/NORESTART" -Wait -PassThru
+          if ($install.ExitCode -ne 0) { throw "Setup failed with $($install.ExitCode)" }
+          $exe = Join-Path $env:LOCALAPPDATA "Programs\ProSnip-Bob\ProSnip-Bob.exe"
+          if (-not (Test-Path $exe)) { throw "Installed executable was not found at $exe" }
+          if (-not (Test-Path (Join-Path (Split-Path $exe) "installed.txt"))) { throw "installed.txt was not written" }
+          $versionRun = Start-Process -FilePath $exe -ArgumentList "--version" -Wait -PassThru
+          if ($versionRun.ExitCode -ne 0) { throw "version check failed with $($versionRun.ExitCode)" }
+          $smoke = Start-Process -FilePath $exe -ArgumentList "--self-test" -Wait -PassThru
+          if ($smoke.ExitCode -ne 0) { throw "self-test failed with $($smoke.ExitCode)" }
+          if (Test-Path (Join-Path (Split-Path $exe) "ProSnip-Bob.log")) { throw "The installed copy wrote its log beside the executable" }
+          $log = Join-Path $env:LOCALAPPDATA "ProSnip-Bob\ProSnip-Bob.log"
+          if (-not (Test-Path $log)) { throw "The installed log was not written to $log" }
+          $start = Select-String -Path $log -Pattern "START $version log=" -Quiet
+          if (-not $start) { throw "The START line does not record the log path" }
+          $unins = Join-Path (Split-Path $exe) "unins000.exe"
+          $remove = Start-Process -FilePath $unins -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART" -Wait -PassThru
+          if ($remove.ExitCode -ne 0) { throw "Uninstall failed with $($remove.ExitCode)" }
+          if (Test-Path $exe) { throw "The executable was still present after uninstall" }
+
+      - name: Upload versioned build
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ${{ steps.version.outputs.name }}
+          path: dist/${{ steps.version.outputs.name }}.zip
+          if-no-files-found: error
+
+      - name: Upload installer
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ProSnip-Bob-${{ steps.version.outputs.version }}-Setup
+          path: dist/ProSnip-Bob-${{ steps.version.outputs.version }}-Setup.exe
+          if-no-files-found: error

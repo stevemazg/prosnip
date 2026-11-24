@@ -1,0 +1,121 @@
+name: Screenshots
+
+# The production executable does not include this harness. This job builds src/demo_main.py.
+# The installer is produced by the Build workflow, not here.
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - prosnip-bob
+    paths:
+      - ".github/workflows/screenshots.yml"
+      - "src/demo_screenshots.py"
+
+permissions:
+  contents: read
+
+jobs:
+  capture:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.12"
+
+      - name: Build ProSnip-Bob
+        run: |
+          python -m venv .venv
+          .venv\Scripts\python.exe -m pip install --upgrade pip
+          .venv\Scripts\python.exe -m pip install -r requirements.txt
+          $env:Path = "$PWD\.venv\Scripts;$env:Path"
+          .venv\Scripts\python.exe scripts/write_version_info.py
+          pyinstaller --noconfirm --clean --onedir --windowed --noupx --name ProSnip-Bob-Demo --exclude-module tkinter --version-file version_info.txt --add-data "assets/checkbox-tick.png;assets" src/demo_main.py
+
+      - name: Capture windows from the built executable
+        run: |
+          New-Item -ItemType Directory -Force -Path screenshots | Out-Null
+          $proc = Start-Process -FilePath ".\dist\ProSnip-Bob-Demo\ProSnip-Bob-Demo.exe" -ArgumentList "$PWD\screenshots" -Wait -PassThru
+          Write-Host "demo exit: $($proc.ExitCode)"
+          Get-ChildItem -Path screenshots | Format-Table Name, Length
+          if (Test-Path .\dist\ProSnip-Bob-Demo\ProSnip-Bob.log) {
+            Write-Host "----- ProSnip-Bob.log -----"
+            Get-Content .\dist\ProSnip-Bob-Demo\ProSnip-Bob.log -Tail 120
+          }
+          if (Test-Path .\screenshots\fault.log) {
+            Write-Host "----- fault.log -----"
+            Get-Content .\screenshots\fault.log
+          }
+          if ($null -eq $proc.ExitCode -or $proc.ExitCode -ne 0) { exit 1 }
+          foreach ($name in @(
+            "01-main-window.png",
+            "02-editor.png",
+            "03-colour-dropdown.png",
+            "06-arrow-presets.png",
+            "07-properties.png",
+            "08-stamp-picker.png",
+            "09-text-background.png",
+            "10-image-placeholder.png",
+            "11-toolbar-tooltip.png",
+            "12-toolbar.png",
+            "13-picker-loupe.png",
+            "14-editor-small.png",
+            "15-colour-card.png",
+            "16-swatches.png",
+            "17-no-trails.png",
+            "18-steps.png",
+            "19-file-menu.png",
+            "20-step-properties.png",
+            "21-editor-1024.png",
+            "22-colour-popup.png",
+            "23-arrange-menu.png",
+            "24-editor-1920.png",
+            "25-shape-options.png",
+            "26-transparent-popup.png",
+            "27-shape-fills.png",
+            "30-editor-1024-light.png",
+            "31-editor-1024-dark.png",
+            "32-editor-1920-light.png",
+            "33-editor-1920-dark.png",
+            "34-more-menu.png",
+            "35-sidebar-arrow.png",
+            "36-sidebar-callout.png",
+            "39-sidebar-shape.png",
+            "40-sidebar-step.png",
+            "41-sidebar-pen.png",
+            "37-recents-tray.png",
+            "38-canvas-demo.png",
+            "42-new-tools.png",
+            "43-three-captures.png",
+            "44-close-prompt.png",
+            "45-four-captures.png",
+            "46-dark-accent.png",
+            "47-checks-light.png",
+            "48-checks-dark.png",
+            "49-delete-confirm.png",
+            "50-reopen-group.png",
+            "51-footer-size.png",
+            "52-crop-outside.png",
+            "53-installer-welcome.png",
+            "54-default-light.png",
+            "55-default-dark.png",
+            "56-default-restart.png"
+          )) {
+            $file = Join-Path screenshots $name
+            if (-not (Test-Path $file)) { throw "Missing $name" }
+          }
+
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ProSnip-Bob-screenshots
+          path: screenshots/*.png
+          if-no-files-found: error

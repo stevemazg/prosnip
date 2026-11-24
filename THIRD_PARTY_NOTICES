@@ -1,0 +1,19 @@
+Third-party notices for ProSnip-Bob
+
+PyQt6 and Qt
+  Copyright (C) The Qt Company Ltd. and Riverbank Computing
+  Licensed under the GNU General Public License version 3.
+  https://www.qt.io/licensing/
+  https://www.riverbankcomputing.com/software/pyqt/
+
+Pillow
+  Copyright (c) 2010-2024 Jeffrey A. Clark (Alex) and contributors
+  Licensed under the MIT License (HPND for some modules).
+  https://github.com/python-pillow/Pillow
+
+PyInstaller
+  Copyright (c) PyInstaller Development Team
+  Licensed under the GNU General Public License version 2 (with an exception).
+  https://pyinstaller.org/
+
+Icons in this application are drawn in-house. No third-party icon set is bundled.
