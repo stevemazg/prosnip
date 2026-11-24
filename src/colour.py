@@ -5,8 +5,11 @@ stay consistent with what is copied to the clipboard.
 """
 
 import json
+import logging
 import os
 from pathlib import Path
+
+log = logging.getLogger("prosnip")
 
 FORMATS = ("hex", "rgb", "hsl")
 HISTORY_LIMIT = 12
@@ -93,7 +96,11 @@ def parse_hex(text: str) -> tuple[int, int, int] | None:
 
 
 def settings_path() -> Path:
-    """Remembered picker settings live beside the custom stamps."""
+    """Remembered settings. An installed copy uses the local user folder."""
+    from paths import installed_copy, user_data_dir
+
+    if installed_copy():
+        return user_data_dir() / "settings.json"
     appdata = os.environ.get("APPDATA")
     root = Path(appdata) if appdata else Path.home() / "AppData" / "Roaming"
     return root / "ProSnip-Bob" / "settings.json"
@@ -127,6 +134,7 @@ class ColourHistory:
         self.retention_days = 0
         self.confirm_close = True
         self.canvas_colour = "#f4f5f6"
+        self._tool_defaults: dict = {}
         self._extra: dict = {}
         self.load()
 
@@ -141,8 +149,12 @@ class ColourHistory:
             "colour_format", "loupe_zoom", "recent_colours", "auto_copy", "last_folder",
             "border_colour", "fill_colour", "fill_opacity", "border_opacity",
             "theme", "toolbar_mode", "toolbar_order", "sidebar_visible", "tray_visible",
+            "capture_hotkey", "pick_hotkey", "retention_days", "confirm_close",
+            "canvas_colour", "tool_defaults",
         }
         }
+        from tool_defaults import read_store
+        self._tool_defaults = read_store(data.get("tool_defaults"))
         fmt = data.get("colour_format", "hex")
         self.format = fmt if fmt in FORMATS else "hex"
         self.zoom = clamp_zoom(data.get("loupe_zoom", ZOOM_DEFAULT))
@@ -201,8 +213,28 @@ class ColourHistory:
             "retention_days": self.retention_days,
             "confirm_close": self.confirm_close,
             "canvas_colour": self.canvas_colour,
+            "tool_defaults": self.tool_defaults_blob(),
         })
         _write_json(self.path, payload)
+
+    def tool_defaults_blob(self) -> dict:
+        from tool_defaults import pack_store
+        return pack_store(self._tool_defaults)
+
+    def tool_default(self, tool: str) -> dict | None:
+        values = self._tool_defaults.get(tool)
+        return None if values is None else dict(values)
+
+    def set_tool_default(self, tool: str, values: dict) -> None:
+        from tool_defaults import NAMES, sanitize
+        if tool not in NAMES:
+            return
+        self._tool_defaults[tool] = sanitize(tool, values)
+        self.save()
+
+    def reset_tool_default(self, tool: str) -> None:
+        self._tool_defaults.pop(tool, None)
+        self.save()
 
     def set_auto_copy(self, enabled: bool) -> None:
         self.auto_copy = bool(enabled)
@@ -281,6 +313,7 @@ def _read_json(path: Path) -> dict:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError, UnicodeError):
+        log.warning("Could not read settings %s; built-in defaults will be used", path)
         return {}
     return data if isinstance(data, dict) else {}
 

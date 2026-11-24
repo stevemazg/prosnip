@@ -55,6 +55,7 @@ class ProSnipScene(QGraphicsScene):
         self.shadow_offset = 4
         self.shadow_blur = 8
         self.spotlight_darkness = 140
+        self.blur_block = 14
         self._image_rect_item = None
         self._next_number = 1
         self._clipboard = []
@@ -502,7 +503,7 @@ class ProSnipScene(QGraphicsScene):
             event.accept()
 
         elif tool == "blur":
-            item = BlurItem(QRectF(pos, pos))
+            item = BlurItem(QRectF(pos, pos), self.blur_block)
             self.addItem(item)
             self._current_item = item
             event.accept()

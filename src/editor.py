@@ -33,7 +33,7 @@ from PIL import Image, ImageOps
 log = logging.getLogger("prosnip")
 
 APP_NAME = "ProSnip-Bob"
-APP_VERSION = "1.8.4.0"
+APP_VERSION = "1.8.5.0"
 
 
 def clamp_crop_rect(rect: QRectF, width: int, height: int) -> QRect | None:
@@ -1029,6 +1029,7 @@ class EditorWindow(QMainWindow):
         self._scene.set_tool(tool)
         if getattr(self, "_bar", None) is not None:
             self._bar.set_tool(tool)
+        self._options.apply_tool_default(tool)
         self._options.refresh()
         self._sidebar.set_tool_name(tool, len(self._scene.selectedItems()))
 

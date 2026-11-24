@@ -106,6 +106,10 @@ def capture_demo_screenshots(folder: Path) -> int:
         saved.append(_reopened(folder / "50-reopen-group.png"))
         saved.append(_footer_switch(folder / "51-footer-size.png"))
         saved.append(_crop_outside(folder / "52-crop-outside.png"))
+        saved.append(_installer_welcome(folder / "53-installer-welcome.png"))
+        saved.append(_defaults_panel(folder / "54-default-light.png", "light"))
+        saved.append(_defaults_panel(folder / "55-default-dark.png", "dark"))
+        saved.append(_default_restart(folder / "56-default-restart.png"))
         _assert_sizes()
         editor.close()
     except Exception:
@@ -750,6 +754,97 @@ def _crop_outside(path: Path) -> Path:
         return _grab(window, path)
     finally:
         window.close()
+
+
+def _installer_welcome(path: Path) -> Path:
+    from PyQt6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
+
+    host = QWidget()
+    host.setWindowTitle("ProSnip-Bob Setup")
+    row = QHBoxLayout(host)
+    row.setContentsMargins(0, 0, 0, 0)
+    row.setSpacing(0)
+    side = QLabel("ProSnip-Bob")
+    side.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    side.setFixedWidth(164)
+    side.setStyleSheet("background: #4f46e5; color: white; font-size: 16px;")
+    row.addWidget(side)
+    body = QWidget()
+    column = QVBoxLayout(body)
+    column.setContentsMargins(24, 24, 24, 24)
+    title = QLabel("Welcome to ProSnip-Bob 1.8.5.0")
+    title.setStyleSheet("font-size: 18px;")
+    column.addWidget(title)
+    column.addWidget(QLabel("This installs ProSnip-Bob for you, or for everyone on this PC."))
+    column.addWidget(QLabel("A Start menu shortcut is created. Desktop and startup shortcuts are optional."))
+    column.addWidget(QLabel("Your captures and settings stay in your user folder if you uninstall."))
+    column.addStretch(1)
+    row.addWidget(body, 1)
+    host.resize(640, 360)
+    host.show()
+    app = QApplication.instance()
+    if app is not None:
+        app.processEvents()
+    try:
+        return _grab(host, path)
+    finally:
+        host.close()
+
+
+def _defaults_panel(path: Path, mode: str) -> Path:
+    from theme import apply_theme
+
+    window = _editor_window()
+    window._theme = apply_theme(mode)
+    window._apply_workspace()
+    window._on_tool_changed("rect")
+    window._sidebar._header.hide()
+    window._sidebar._grid_host.hide()
+    theme = window._sidebar.findChild(type(window._sidebar._theme), "PresetTheme")
+    if theme is not None and theme.parentWidget() is not None:
+        theme.parentWidget().hide()
+    _present(window, 1024, 780)
+    window._sidebar._scroll.ensureWidgetVisible(window._options._default_btn)
+    app = QApplication.instance()
+    if app is not None:
+        app.processEvents()
+    try:
+        return _grab(window._sidebar, path)
+    finally:
+        window.close()
+
+
+def _default_restart(path: Path) -> Path:
+    import tempfile
+    from editor import EditorWindow
+    from items import RectItem
+
+    previous = os.environ.get("APPDATA")
+    os.environ["APPDATA"] = tempfile.mkdtemp()
+    window = EditorWindow(Image.new("RGB", (320, 180), "#f4f5f6"))
+    again = None
+    try:
+        window._on_tool_changed("rect")
+        window._options.set_border_colour(QColor("#128a3e"))
+        window._options._width.setValue(8)
+        window._options._save_default()
+        window.close()
+        again = EditorWindow(Image.new("RGB", (320, 180), "#f4f5f6"))
+        again._on_tool_changed("rect")
+        colour = QColor(again._scene.pen_color)
+        again._scene.addItem(RectItem(
+            QRectF(90, 40, 140, 80), colour, QColor(18, 138, 62, 60), again._scene.line_width,
+        ))
+        _present(again, 1024, 680)
+        return _grab(again, path)
+    finally:
+        if again is not None:
+            again.close()
+        window.close()
+        if previous is None:
+            os.environ.pop("APPDATA", None)
+        else:
+            os.environ["APPDATA"] = previous
 
 
 def _canvas_demo(path: Path) -> Path:

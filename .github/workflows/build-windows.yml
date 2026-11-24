@@ -69,7 +69,7 @@ jobs:
       - name: Build executable
         run: |
           $env:Path = "$PWD\.venv\Scripts;$env:Path"
-          pyinstaller --noconfirm --clean --onedir --windowed --noupx --name ProSnip-Bob --exclude-module tkinter --version-file version_info.txt --add-data "LICENSE;." --add-data "THIRD_PARTY_NOTICES;." --add-data "assets/checkbox-tick.png;assets" src/main.py
+          pyinstaller --noconfirm --clean --onedir --windowed --noupx --name ProSnip-Bob --exclude-module tkinter --version-file version_info.txt --add-data "LICENSE;." --add-data "THIRD_PARTY_NOTICES;." --add-data "assets/checkbox-tick.png;assets" --icon assets/prosnip-bob.ico src/main.py
 
       - name: Zip application folder
         run: |
@@ -86,9 +86,54 @@ jobs:
           Write-Host "Zip contents:"
           tar -tf $zip
 
+      - name: Build installer
+        run: |
+          choco install innosetup -y --no-progress
+          $bundle = "${{ steps.version.outputs.name }}"
+          $version = "${{ steps.version.outputs.version }}"
+          $iscc = @(
+            "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
+            "$env:ProgramFiles\Inno Setup 6\ISCC.exe"
+          ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $iscc) { throw "ISCC was not found" }
+          & $iscc "/DAppVersion=$version" "/DSourceDir=$PWD\dist\$bundle" "installer\prosnip.iss"
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed with $LASTEXITCODE" }
+          $setup = "dist\ProSnip-Bob-$version-Setup.exe"
+          if (-not (Test-Path $setup)) { throw "The setup executable was not produced" }
+
+      - name: Install, smoke test, and uninstall
+        run: |
+          $version = "${{ steps.version.outputs.version }}"
+          $setup = "dist\ProSnip-Bob-$version-Setup.exe"
+          $install = Start-Process -FilePath $setup -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/CURRENTUSER","/NORESTART" -Wait -PassThru
+          if ($install.ExitCode -ne 0) { throw "Setup failed with $($install.ExitCode)" }
+          $exe = Join-Path $env:LOCALAPPDATA "Programs\ProSnip-Bob\ProSnip-Bob.exe"
+          if (-not (Test-Path $exe)) { throw "Installed executable was not found at $exe" }
+          if (-not (Test-Path (Join-Path (Split-Path $exe) "installed.txt"))) { throw "installed.txt was not written" }
+          $versionRun = Start-Process -FilePath $exe -ArgumentList "--version" -Wait -PassThru
+          if ($versionRun.ExitCode -ne 0) { throw "version check failed with $($versionRun.ExitCode)" }
+          $smoke = Start-Process -FilePath $exe -ArgumentList "--self-test" -Wait -PassThru
+          if ($smoke.ExitCode -ne 0) { throw "self-test failed with $($smoke.ExitCode)" }
+          if (Test-Path (Join-Path (Split-Path $exe) "ProSnip-Bob.log")) { throw "The installed copy wrote its log beside the executable" }
+          $log = Join-Path $env:LOCALAPPDATA "ProSnip-Bob\ProSnip-Bob.log"
+          if (-not (Test-Path $log)) { throw "The installed log was not written to $log" }
+          $start = Select-String -Path $log -Pattern "START $version log=" -Quiet
+          if (-not $start) { throw "The START line does not record the log path" }
+          $unins = Join-Path (Split-Path $exe) "unins000.exe"
+          $remove = Start-Process -FilePath $unins -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART" -Wait -PassThru
+          if ($remove.ExitCode -ne 0) { throw "Uninstall failed with $($remove.ExitCode)" }
+          if (Test-Path $exe) { throw "The executable was still present after uninstall" }
+
       - name: Upload versioned build
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: ${{ steps.version.outputs.name }}
           path: dist/${{ steps.version.outputs.name }}.zip
+          if-no-files-found: error
+
+      - name: Upload installer
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ProSnip-Bob-${{ steps.version.outputs.version }}-Setup
+          path: dist/ProSnip-Bob-${{ steps.version.outputs.version }}-Setup.exe
           if-no-files-found: error

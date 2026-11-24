@@ -679,7 +679,8 @@ class AppTests(unittest.TestCase):
             "pyinstaller --noconfirm --clean --onedir --windowed --noupx "
             "--name ProSnip-Bob --exclude-module tkinter "
             "--version-file version_info.txt --add-data \"LICENSE;.\" "
-            "--add-data \"THIRD_PARTY_NOTICES;.\" --add-data \"assets/checkbox-tick.png;assets\" src/main.py"
+            "--add-data \"THIRD_PARTY_NOTICES;.\" --add-data \"assets/checkbox-tick.png;assets\" "
+            "--icon assets/prosnip-bob.ico src/main.py"
         )
         self.assertIn(command, build)
         self.assertIn(command, workflow)
@@ -693,7 +694,8 @@ class AppTests(unittest.TestCase):
         self.assertIn("steps.version.outputs.name", workflow)
         self.assertIn("ProSnip-Bob-$version-win64", workflow)
         self.assertNotIn("dist/ProSnip-Bob.zip", workflow)
-        self.assertNotIn("name: ProSnip-Bob", workflow)
+        self.assertNotIn("name: ProSnip-Bob\n", workflow)
+        self.assertNotIn("name: ProSnip-Bob ", workflow)
         self.assertIn("prosnip-bob", workflow)
         self.assertIn("python-version: \"3.12\"", workflow)
         self.assertIn("QT_QPA_PLATFORM: offscreen", workflow)
@@ -712,6 +714,22 @@ class AppTests(unittest.TestCase):
         ):
             self.assertIn(text, version)
         self.assertIn("unittest tests.test_prosnip_bob", workflow)
+        self.assertIn("ISCC", workflow)
+        self.assertIn("/VERYSILENT", workflow)
+        self.assertIn("/CURRENTUSER", workflow)
+        self.assertIn("ProSnip-Bob-${{ steps.version.outputs.version }}-Setup", workflow)
+        script = (ROOT / "installer" / "prosnip.iss").read_text(encoding="utf-8")
+        for text in (
+            "PrivilegesRequiredOverridesAllowed=dialog",
+            "AppMutex=ProSnipBobSetup",
+            "LicenseFile=..\\LICENSE",
+            "THIRD_PARTY_NOTICES",
+            "installed.txt",
+            "{autopf}\\{#AppName}",
+            "desktopicon",
+            "startup",
+        ):
+            self.assertIn(text, script)
         self.assertNotIn("import demo_screenshots", (ROOT / "src" / "main.py").read_text(encoding="utf-8"))
 
     def test_frozen_log_sits_next_to_the_exe(self):
@@ -1969,6 +1987,123 @@ class Quality184Tests(unittest.TestCase):
         ))
         self.assertLess(window._view.transform().m11(), 2.0)
         self.assertTrue(any("Ctrl+Alt+0" in action.text() for action in window._view_menu.actions()))
+
+
+class Quality185Tests(unittest.TestCase):
+    def test_tool_defaults_round_trip_for_every_tool(self):
+        from colour import ColourHistory
+        from tool_defaults import NAMES, builtin
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "settings.json"
+            history = ColourHistory(path)
+            for tool in NAMES:
+                values = builtin(tool)
+                values["colour"] = "#112233"
+                values["width"] = 9
+                history.set_tool_default(tool, values)
+            again = ColourHistory(path)
+            for tool in NAMES:
+                saved = again.tool_default(tool)
+                self.assertIsNotNone(saved)
+                self.assertEqual(saved["colour"], "#112233")
+                self.assertEqual(saved["width"], 9)
+            again.reset_tool_default("rect")
+            self.assertIsNone(ColourHistory(path).tool_default("rect"))
+            self.assertEqual(ColourHistory(path).tool_default("pen")["width"], 9)
+
+    def test_corrupt_settings_fall_back_to_built_ins(self):
+        from colour import ColourHistory
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "settings.json"
+            path.write_text('{"tool_defaults": "nope", "theme": "dark"}', encoding="utf-8")
+            with self.assertLogs("prosnip", level="WARNING") as caught:
+                history = ColourHistory(path)
+            self.assertTrue(any("damaged" in line for line in caught.output))
+            self.assertIsNone(history.tool_default("rect"))
+            self.assertEqual(history.theme, "dark")
+            path.write_text("{", encoding="utf-8")
+            with self.assertLogs("prosnip", level="WARNING"):
+                blank = ColourHistory(path)
+            self.assertEqual(blank.theme, "system")
+            self.assertIsNone(blank.tool_default("arrow"))
+
+    def test_a_new_editor_loads_the_saved_tool_default(self):
+        previous = os.environ.get("APPDATA")
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                os.environ["APPDATA"] = tmp
+                window = editor.EditorWindow(Image.new("RGB", (80, 40), "white"))
+                window._prompt_on_close = False
+                window._on_tool_changed("rect")
+                window._options._width.setValue(9)
+                window._options.set_border_colour(QColor("#112233"))
+                window._options._save_default()
+                self.assertIn("Rectangle", window.statusBar().currentMessage())
+                self.assertIsNotNone(window._options.findChild(QWidget, "SetDefault"))
+                self.assertIsNotNone(window._options.findChild(QWidget, "ResetDefault"))
+                window.close()
+                again = editor.EditorWindow(Image.new("RGB", (80, 40), "white"))
+                again._prompt_on_close = False
+                again._on_tool_changed("rect")
+                self.assertEqual(again._scene.line_width, 9)
+                self.assertEqual(again._scene.pen_color.name().lower(), "#112233")
+                again._options._reset_default()
+                self.assertEqual(again._scene.line_width, 2)
+                again.close()
+        finally:
+            if previous is None:
+                os.environ.pop("APPDATA", None)
+            else:
+                os.environ["APPDATA"] = previous
+
+    def test_installed_copy_logs_under_local_app_data(self):
+        old_executable = sys.executable
+        had_frozen = hasattr(sys, "frozen")
+        old_frozen = getattr(sys, "frozen", None)
+        previous = os.environ.get("LOCALAPPDATA")
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                exe_dir = root / "Program Files" / "ProSnip-Bob"
+                exe_dir.mkdir(parents=True)
+                exe = exe_dir / "ProSnip-Bob.exe"
+                exe.write_bytes(b"")
+                (exe_dir / "installed.txt").write_text("ProSnip-Bob", encoding="utf-8")
+                local = root / "local"
+                os.environ["LOCALAPPDATA"] = str(local)
+                sys.frozen = True
+                sys.executable = str(exe)
+                self.assertEqual(main.candidate_log_directories(), [local / "ProSnip-Bob"])
+        finally:
+            sys.executable = old_executable
+            if had_frozen:
+                sys.frozen = old_frozen
+            elif hasattr(sys, "frozen"):
+                delattr(sys, "frozen")
+            if previous is None:
+                os.environ.pop("LOCALAPPDATA", None)
+            else:
+                os.environ["LOCALAPPDATA"] = previous
+
+    def test_start_line_records_the_log_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "ProSnip-Bob.log"
+            original = main.resolve_log_path
+            previous = main._log_handle
+            main.resolve_log_path = lambda directories=None: path
+            try:
+                main._mark_session_start()
+                text = path.read_text(encoding="utf-8")
+                self.assertIn(f"START {editor.APP_VERSION} log={path}", text)
+                main._mark_clean_exit()
+            finally:
+                handle = main._log_handle
+                if handle is not None and handle is not previous:
+                    handle.close()
+                main._log_handle = previous
+                main.resolve_log_path = original
 
 
 if __name__ == "__main__":

@@ -101,7 +101,11 @@ jobs:
             "49-delete-confirm.png",
             "50-reopen-group.png",
             "51-footer-size.png",
-            "52-crop-outside.png"
+            "52-crop-outside.png",
+            "53-installer-welcome.png",
+            "54-default-light.png",
+            "55-default-dark.png",
+            "56-default-restart.png"
           )) {
             $file = Join-Path screenshots $name
             if (-not (Test-Path $file)) { throw "Missing $name" }

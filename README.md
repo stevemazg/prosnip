@@ -84,7 +84,7 @@ Select any annotation item and drag the white square handles to resize it.
 
 ## Log
 
-ProSnip-Bob writes `ProSnip-Bob.log` in the same folder as `ProSnip-Bob.exe`. In the folder build that is next to the `_internal` directory, not inside it. If that folder cannot be written, the log is saved under `%LOCALAPPDATA%\ProSnip-Bob\`. An unexpected error is written to the log and shown in a message box, so a windowed build does not close without an explanation.
+A portable copy writes `ProSnip-Bob.log` in the same folder as `ProSnip-Bob.exe`. In the folder build that is next to the `_internal` directory, not inside it. If that folder cannot be written, the log is saved under `%LOCALAPPDATA%\ProSnip-Bob\`. An installed copy always writes the log and its settings there, because Program Files is not writable. The START line in the log records the path. An unexpected error is written to the log and shown in a message box, so a windowed build does not close without an explanation.
 
 ## Build (Windows)
 
@@ -95,12 +95,12 @@ build.bat
 That runs:
 
 ```bat
-pyinstaller --noconfirm --clean --onedir --windowed --noupx --name ProSnip-Bob --exclude-module tkinter --version-file version_info.txt --add-data "LICENSE;." --add-data "THIRD_PARTY_NOTICES;." --add-data "assets/checkbox-tick.png;assets" src/main.py
+pyinstaller --noconfirm --clean --onedir --windowed --noupx --name ProSnip-Bob --exclude-module tkinter --version-file version_info.txt --add-data "LICENSE;." --add-data "THIRD_PARTY_NOTICES;." --add-data "assets/checkbox-tick.png;assets" --icon assets/prosnip-bob.ico src/main.py
 ```
 
-Output: `dist/ProSnip-Bob/`, containing `ProSnip-Bob.exe` and `_internal`. Run `ProSnip-Bob.exe` from that folder. The executable needs `_internal` beside it. Version information in the executable names the product ProSnip-Bob, version 1.8.4.0. UPX is not used.
+Output: `dist/ProSnip-Bob/`, containing `ProSnip-Bob.exe` and `_internal`. Run `ProSnip-Bob.exe` from that folder. The executable needs `_internal` beside it. Version information in the executable names the product ProSnip-Bob, version 1.8.5.0. UPX is not used.
 
-GitHub Actions (`.github/workflows/build-windows.yml`) builds the same executable on `windows-latest` when `prosnip-bob` is pushed, and when the workflow is run by hand. It reads `APP_VERSION` from `src/editor.py`, checks that it matches the FileVersion and ProductVersion embedded in the executable, then publishes the folder and the zip as `ProSnip-Bob-<version>-win64` (for example `ProSnip-Bob-1.8.4.0-win64`). The executable inside that folder is still `ProSnip-Bob.exe`.
+GitHub Actions (`.github/workflows/build-windows.yml`) builds the same executable on `windows-latest` when `prosnip-bob` is pushed, and when the workflow is run by hand. It reads `APP_VERSION` from `src/editor.py`, checks that it matches the FileVersion and ProductVersion embedded in the executable, then publishes the portable zip as `ProSnip-Bob-<version>-win64` (for example `ProSnip-Bob-1.8.5.0-win64`) and the installer as `ProSnip-Bob-<version>-Setup`. The executable inside the zip is still `ProSnip-Bob.exe`. The installer offers a per-user or all-users install, a Start menu shortcut, and optional desktop and startup shortcuts.
 
 ProSnip-Bob is not code-signed. Windows SmartScreen may warn the first time you run it. If you trust the build, choose More info and then Run anyway. Antivirus software may also warn about a new unsigned application. The build does not use a packer, and it does not install a low-level keyboard hook.
 

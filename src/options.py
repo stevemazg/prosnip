@@ -223,6 +223,19 @@ class ToolOptions(QWidget):
         self._cut_hint.setObjectName("CutHint")
         form.addRow(self._cut_hint)
 
+        self._default_btn = QPushButton("Set as default")
+        self._default_btn.setObjectName("SetDefault")
+        self._default_btn.setToolTip("Remember these options for this tool")
+        self._reset_btn = QPushButton("Reset to built-in default")
+        self._reset_btn.setObjectName("ResetDefault")
+        self._reset_btn.setToolTip("Forget the saved options and use the built-in ones")
+        form.addRow(self._default_btn)
+        form.addRow(self._reset_btn)
+        self._default_btn.clicked.connect(self._save_default)
+        self._reset_btn.clicked.connect(self._reset_default)
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._defaults_menu)
+
         self._width.valueChanged.connect(self._apply_width)
         self._font.valueChanged.connect(self._apply_font)
         self._opacity.valueChanged.connect(self._apply_opacity)
@@ -298,6 +311,124 @@ class ToolOptions(QWidget):
 
     def note_colour(self, colour: QColor):
         self.set_border_colour(QColor(colour))
+
+    def _defaults_target(self, tool: str | None = None) -> str | None:
+        from tool_defaults import NAMES
+        name = self._tool() if tool is None else tool
+        if name == "rect" and self._selected() is not None and isinstance(self._selected(), EllipseItem):
+            return "ellipse"
+        return name if name in NAMES else None
+
+    def current_tool_values(self, tool: str) -> dict:
+        from tool_defaults import builtin
+        values = builtin(tool)
+        values.update({
+            "colour": self._colour.name().lower(),
+            "fill": self._fill.name().lower(),
+            "text_colour": self._colour.name().lower(),
+            "fill_opacity": int(self._fill_opacity),
+            "border_opacity": int(self._border_opacity),
+            "width": int(self._width.value()),
+            "font": int(self._font.value()),
+            "opacity": int(self._opacity.value()),
+            "shadow": bool(self._shadow.isChecked()),
+            "shadow_offset": int(self._shadow_offset.value()),
+            "shadow_blur": int(self._shadow_blur.value()),
+            "radius": int(self._radius.value()),
+            "outline": bool(self._outline.isChecked()),
+            "curve": bool(self._curve.isChecked()),
+            "start_cap": self._start_cap.currentText().strip().lower(),
+            "end_cap": self._end_cap.currentText().strip().lower(),
+            "darkness": int(self._dark.value()),
+            "block": int(self._width.value()),
+        })
+        return values
+
+    def apply_tool_default(self, tool: str) -> None:
+        """Load the saved default for a tool, or the built-in values."""
+        from tool_defaults import NAMES, builtin
+        if tool not in NAMES or self._scene is None:
+            return
+        saved = self._history.tool_default(tool) if self._history is not None else None
+        values = builtin(tool)
+        if saved:
+            values.update(saved)
+        self._apply_value_dict(values)
+
+    def _apply_value_dict(self, values: dict) -> None:
+        self._updating = True
+        colour = QColor(values["colour"])
+        self._border_opacity = int(values["border_opacity"])
+        colour.setAlpha(_alpha(self._border_opacity))
+        self._colour = colour
+        fill = QColor(values["fill"])
+        self._fill_opacity = int(values["fill_opacity"])
+        fill.setAlpha(_alpha(self._fill_opacity))
+        self._fill = fill
+        self._width.setValue(int(values["width"]))
+        self._font.setValue(int(values["font"]))
+        self._opacity.setValue(int(values["opacity"]))
+        self._fill_opacity_spin.setValue(self._fill_opacity)
+        self._shadow.setChecked(bool(values["shadow"]))
+        self._shadow_offset.setValue(int(values["shadow_offset"]))
+        self._shadow_blur.setValue(int(values["shadow_blur"]))
+        self._radius.setValue(int(values["radius"]))
+        self._outline.setChecked(bool(values["outline"]))
+        self._curve.setChecked(bool(values["curve"]))
+        self._start_cap.setCurrentText(str(values["start_cap"]).capitalize())
+        self._end_cap.setCurrentText(str(values["end_cap"]).capitalize())
+        self._dark.setValue(int(values["darkness"]))
+        self._updating = False
+        if self._scene is None:
+            return
+        self._scene.set_pen_color(QColor(self._colour))
+        self._scene.set_fill_color(QColor(self._fill))
+        self._scene.set_text_color(QColor(values["text_colour"]))
+        self._scene.set_line_width(int(values["width"]))
+        self._scene.set_font_size(int(values["font"]))
+        self._scene.item_opacity = max(0.1, int(values["opacity"]) / 100.0)
+        self._scene.shadow_enabled = bool(values["shadow"])
+        self._scene.shadow_offset = int(values["shadow_offset"])
+        self._scene.shadow_blur = int(values["shadow_blur"])
+        self._scene.corner_radius = int(values["radius"])
+        self._scene.spotlight_darkness = int(values["darkness"])
+        self._scene.blur_block = int(values["block"])
+        self._scene.arrow_style = "curved" if values["curve"] else "plain"
+        self._scene.arrow_start = str(values["start_cap"])
+        self._scene.arrow_end = str(values["end_cap"])
+        self._paint_swatches()
+
+    def _save_default(self) -> None:
+        from tool_defaults import NAMES
+        tool = self._defaults_target()
+        if tool is None or self._history is None:
+            return
+        self._history.set_tool_default(tool, self.current_tool_values(tool))
+        self._tell(f"Saved as default for {NAMES[tool]}")
+
+    def _reset_default(self) -> None:
+        from tool_defaults import NAMES, builtin
+        tool = self._defaults_target()
+        if tool is None or self._history is None:
+            return
+        self._history.reset_tool_default(tool)
+        self._apply_value_dict(builtin(tool))
+        self.refresh()
+        self._tell(f"Restored the built-in default for {NAMES[tool]}")
+
+    def _defaults_menu(self, pos) -> None:
+        if self._defaults_target() is None:
+            return
+        menu = QMenu(self)
+        menu.addAction("Set as default", self._save_default)
+        menu.addAction("Reset to built-in default", self._reset_default)
+        menu.exec(self.mapToGlobal(pos))
+
+    def _tell(self, text: str) -> None:
+        window = self.window()
+        bar = window.statusBar() if window is not None and hasattr(window, "statusBar") else None
+        if bar is not None:
+            bar.showMessage(text, 4000)
 
     def refresh(self):
         if self._scene is None or sip.isdeleted(self._scene):
@@ -388,6 +519,9 @@ class ToolOptions(QWidget):
         spot = kind == "spotlight"
         self._show(self._dark_label, self._dark, spot)
         self._cut_hint.setVisible(kind == "cutout")
+        known = self._defaults_target(tool) is not None
+        self._default_btn.setVisible(known)
+        self._reset_btn.setVisible(known)
 
     def _show(self, label, spin, visible: bool):
         label.setVisible(visible)

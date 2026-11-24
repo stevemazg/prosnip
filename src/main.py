@@ -1,5 +1,4 @@
 import logging
-import os
 import sys
 from pathlib import Path
 
@@ -31,17 +30,22 @@ _reporting_exception = False
 
 
 def candidate_log_directories() -> list[Path]:
-    """Where ``ProSnip-Bob.log`` may be written, most preferred first."""
+    """Where ``ProSnip-Bob.log`` may be written, most preferred first.
+
+    An installed copy writes only under the user data folder. A portable
+    folder tries the executable directory first, then the same fallback.
+    """
+    from paths import installed_copy, user_data_dir
+
+    local = user_data_dir()
+    if installed_copy():
+        return [local]
     directories: list[Path] = []
     if getattr(sys, "frozen", False):
         directories.append(Path(sys.executable).resolve().parent)
     else:
         directories.append(Path.cwd())
-    local_app_data = os.environ.get("LOCALAPPDATA")
-    if local_app_data:
-        directories.append(Path(local_app_data) / APP_NAME)
-    else:
-        directories.append(Path.home() / ".local" / "share" / APP_NAME)
+    directories.append(local)
     return directories
 
 
@@ -580,7 +584,7 @@ def _mark_session_start() -> None:
     if "START " in previous and "EXIT clean" not in previous.rsplit("START ", 1)[-1]:
         log.warning("The previous session did not exit cleanly")
     _log_handle = open(path, "a", encoding="utf-8")
-    _log_handle.write(f"\nSTART {APP_VERSION}\n")
+    _log_handle.write(f"\nSTART {APP_VERSION} log={path}\n")
     _log_handle.flush()
     faulthandler.enable(_log_handle, all_threads=True)
 
@@ -595,7 +599,36 @@ def _mark_clean_exit() -> None:
 _log_handle = None
 
 
+def run_self_test() -> int:
+    """Import the application and confirm a log line can be written."""
+    setup_logging()
+    _mark_session_start()
+    import canvas  # noqa: F401
+    import items  # noqa: F401
+    print(f"{APP_NAME} {APP_VERSION} OK")
+    _mark_clean_exit()
+    return 0
+
+
+def _hold_install_mutex():
+    """Let the installer see that this copy is running."""
+    global _install_mutex
+    if sys.platform != "win32" or not getattr(sys, "frozen", False):
+        return
+    import ctypes
+    _install_mutex = ctypes.windll.kernel32.CreateMutexW(None, False, "ProSnipBobSetup")
+
+
+_install_mutex = None
+
+
 def main():
+    if "--version" in sys.argv:
+        print(APP_VERSION)
+        raise SystemExit(0)
+    if "--self-test" in sys.argv:
+        raise SystemExit(run_self_test())
+    _hold_install_mutex()
     setup_logging()
     sys.excepthook = _excepthook
     # Pass fractional scales (150%, 125%) through instead of rounding them
